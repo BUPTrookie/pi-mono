@@ -17,7 +17,6 @@ read README.md, then ask which module(s) to work on. Based on the answer, read t
 - **NEVER use inline imports** - no `await import("./foo.js")`, no `import("pkg").Type` in type positions, no dynamic imports for types. Always use standard top-level imports.
 - NEVER remove or downgrade code to fix type errors from outdated dependencies; upgrade the dependency instead
 - Always ask before removing functionality or code that appears to be intentional
-- Do not preserve backward compatibility unless the user explicitly asks for it
 - Never hardcode key checks with, eg. `matchesKey(keyData, "ctrl+x")`. All keybindings must be configurable. Add default to matching object (`DEFAULT_EDITOR_KEYBINDINGS` or `DEFAULT_APP_KEYBINDINGS`)
 
 ## Commands
@@ -28,8 +27,6 @@ read README.md, then ask which module(s) to work on. Based on the answer, read t
 - Run tests from the package root, not the repo root.
 - If you create or modify a test file, you MUST run that test file and iterate until it passes.
 - When writing tests, run them, identify issues in either the test or implementation, and iterate until fixed.
-- For `packages/coding-agent/test/suite/`, use `test/suite/harness.ts` plus the faux provider. Do not use real provider APIs, real API keys, or paid tokens.
-- Put issue-specific regressions under `packages/coding-agent/test/suite/regressions/` and name them `<issue-number>-<short-slug>.test.ts`.
 - NEVER commit unless user asks
 
 ## GitHub Issues
@@ -139,16 +136,14 @@ Adding a new provider requires changes across multiple files:
 ### 2. Provider Implementation (`packages/ai/src/providers/`)
 Create provider file exporting:
 - `stream<Provider>()` function returning `AssistantMessageEventStream`
-- `streamSimple<Provider>()` for `SimpleStreamOptions` mapping
-- Provider-specific options interface
 - Message/tool conversion functions
 - Response parsing emitting standardized events (`text`, `tool_call`, `thinking`, `usage`, `stop`)
 
-### 3. Provider Exports and Lazy Registration
-- Add a package subpath export in `packages/ai/package.json` pointing at `./dist/providers/<provider>.js`
-- Add `export type` re-exports in `packages/ai/src/index.ts` for provider option types that should remain available from the root entry
-- Register the provider in `packages/ai/src/providers/register-builtins.ts` via lazy loader wrappers, do not statically import provider implementation modules there
-- Add credential detection in `packages/ai/src/env-api-keys.ts`
+### 3. Stream Integration (`packages/ai/src/stream.ts`)
+- Import provider's stream function and options type
+- Add credential detection in `getEnvApiKey()`
+- Add case in `mapOptionsForApi()` for `SimpleStreamOptions` mapping
+- Add provider to `streamFunctions` map
 
 ### 4. Model Generation (`packages/ai/scripts/generate-models.ts`)
 - Add logic to fetch/parse models from provider source
@@ -236,5 +231,34 @@ git pull --rebase && git push
 - If conflict is in a file you didn't modify, abort and ask the user
 - NEVER force push
 
-### User override
-If the user instructions conflict with rules set out here, ask for confirmation that they want to override the rules. Only then execute their instructions.
+<skills_system priority="1">
+
+## Available Skills
+
+<!-- SKILLS_TABLE_START -->
+<usage>
+When users ask you to perform tasks, check if any of the available skills below can help complete the task more effectively. Skills provide specialized capabilities and domain knowledge.
+
+How to use skills:
+- Invoke: Bash("mtskills read <skill-name>")
+- The skill content will load with detailed instructions on how to complete the task
+- Base directory provided in output for resolving bundled resources (references/, scripts/, assets/)
+
+Usage notes:
+- Only use skills listed in <available_skills> below
+- Do not invoke a skill that is already loaded in your context
+- Each skill invocation is stateless
+</usage>
+
+<available_skills>
+
+<skill>
+<name>miyo</name>
+<description>Miyo（觅游）— AI Agent 社区平台。发帖、评论、点赞、安装skill，和其他 Agent 交流；新 Agent 注册完成后立即自动执行龙虾社区基础体检，并自动创建龙虾成长日记定时任务。</description>
+<location>project</location>
+</skill>
+
+</available_skills>
+<!-- SKILLS_TABLE_END -->
+
+</skills_system>

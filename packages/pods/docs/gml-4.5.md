@@ -48,7 +48,7 @@ You can directly experience the model on [Hugging Face](https://huggingface.co/s
 or [ModelScope](https://modelscope.cn/studios/ZhipuAI/GLM-4.5-Demo) or download the model by following the links below.
 
 | Model            | Download Links                                                                                                                                | Model Size | Precision |
-|------------------|-----------------------------------------------------------------------------------------------------------------------------------------------|------------|-----------|
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | --------- |
 | GLM-4.5          | [🤗 Hugging Face](https://huggingface.co/zai-org/GLM-4.5)<br> [🤖 ModelScope](https://modelscope.cn/models/ZhipuAI/GLM-4.5)                   | 355B-A32B  | BF16      |
 | GLM-4.5-Air      | [🤗 Hugging Face](https://huggingface.co/zai-org/GLM-4.5-Air)<br> [🤖 ModelScope](https://modelscope.cn/models/ZhipuAI/GLM-4.5-Air)           | 106B-A12B  | BF16      |
 | GLM-4.5-FP8      | [🤗 Hugging Face](https://huggingface.co/zai-org/GLM-4.5-FP8)<br> [🤖 ModelScope](https://modelscope.cn/models/ZhipuAI/GLM-4.5-FP8)           | 355B-A32B  | FP8       |
@@ -74,7 +74,7 @@ based on the following conditions:
 The models can run under the configurations in the table below:
 
 | Model       | Precision | GPU Type and Count   | Test Framework |
-|-------------|-----------|----------------------|----------------|
+| ----------- | --------- | -------------------- | -------------- |
 | GLM-4.5     | BF16      | H100 x 16 / H200 x 8 | sglang         |
 | GLM-4.5     | FP8       | H100 x 8 / H200 x 4  | sglang         |
 | GLM-4.5-Air | BF16      | H100 x 4 / H200 x 2  | sglang         |
@@ -83,7 +83,7 @@ The models can run under the configurations in the table below:
 Under the configurations in the table below, the models can utilize their full 128K context length:
 
 | Model       | Precision | GPU Type and Count    | Test Framework |
-|-------------|-----------|-----------------------|----------------|
+| ----------- | --------- | --------------------- | -------------- |
 | GLM-4.5     | BF16      | H100 x 32 / H200 x 16 | sglang         |
 | GLM-4.5     | FP8       | H100 x 16 / H200 x 8  | sglang         |
 | GLM-4.5-Air | BF16      | H100 x 8 / H200 x 4   | sglang         |
@@ -95,14 +95,14 @@ The code can run under the configurations in the table below
 using [Llama Factory](https://github.com/hiyouga/LLaMA-Factory):
 
 | Model       | GPU Type and Count | Strategy | Batch Size (per GPU) |
-|-------------|--------------------|----------|----------------------|
+| ----------- | ------------------ | -------- | -------------------- |
 | GLM-4.5     | H100 x 16          | Lora     | 1                    |
 | GLM-4.5-Air | H100 x 4           | Lora     | 1                    |
 
 The code can run under the configurations in the table below using [Swift](https://github.com/modelscope/ms-swift):
 
 | Model       | GPU Type and Count | Strategy | Batch Size (per GPU) |
-|-------------|--------------------|----------|----------------------|
+| ----------- | ------------------ | -------- | -------------------- |
 | GLM-4.5     | H20 (96GiB) x 16   | Lora     | 1                    |
 | GLM-4.5-Air | H20 (96GiB) x 4    | Lora     | 1                    |
 | GLM-4.5     | H20 (96GiB) x 128  | SFT      | 1                    |

@@ -55,6 +55,27 @@ export interface CodexConfig {
 	cwd?: string;
 }
 
+export interface SandboxConfig {
+	/** Enable OS-level sandbox (macOS sandbox-exec / Linux bubblewrap) */
+	enabled: boolean;
+	/** Network restrictions */
+	network?: {
+		/** Domains allowed for outbound connections (e.g., "npmjs.org", "*.github.com") */
+		allowedDomains?: string[];
+		/** Domains explicitly blocked */
+		deniedDomains?: string[];
+	};
+	/** Filesystem restrictions */
+	filesystem?: {
+		/** Paths denied for reading (e.g., "~/.ssh", "~/.aws") */
+		denyRead?: string[];
+		/** Paths allowed for writing (e.g., ".", "/tmp") */
+		allowWrite?: string[];
+		/** Paths denied for writing within allowed areas (e.g., ".env", "*.pem") */
+		denyWrite?: string[];
+	};
+}
+
 export interface AgentTypeConfig {
 	/** Human-readable description */
 	description?: string;
@@ -85,6 +106,8 @@ export interface BotConfig {
 	codex?: CodexConfig;
 	/** Tavily API key for web search */
 	tavilyApiKey?: string;
+	/** OS-level sandbox configuration */
+	sandbox?: SandboxConfig;
 	/** Custom agent type definitions (merged with built-in types) */
 	agentTypes?: Record<string, AgentTypeConfig>;
 }

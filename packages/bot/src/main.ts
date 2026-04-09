@@ -28,6 +28,7 @@ import { loadConfig } from "./config.js";
 import { EventsWatcher } from "./events-watcher.js";
 import { McpManager } from "./mcp-manager.js";
 import { MessageBus } from "./message-bus.js";
+import { initializeSandbox, resetSandbox } from "./sandbox.js";
 
 function parseArgs(args: string[]): {
 	cli: boolean;
@@ -37,6 +38,7 @@ function parseArgs(args: string[]): {
 	dataDir?: string;
 	baseUrl?: string;
 	apiKey?: string;
+	sandbox?: boolean;
 } {
 	const result: ReturnType<typeof parseArgs> = { cli: false };
 
@@ -56,6 +58,10 @@ function parseArgs(args: string[]): {
 			result.baseUrl = args[++i];
 		} else if (arg === "--api-key" && i + 1 < args.length) {
 			result.apiKey = args[++i];
+		} else if (arg === "--sandbox") {
+			result.sandbox = true;
+		} else if (arg === "--no-sandbox") {
+			result.sandbox = false;
 		}
 	}
 
@@ -76,6 +82,8 @@ async function main(): Promise<void> {
 		console.error("  --data-dir <path>   Data directory (default: ~/.bot/data)");
 		console.error("  --base-url <url>    Override model base URL");
 		console.error("  --api-key <key>     API key (alternative to env var)");
+		console.error("  --sandbox           Enable OS-level sandbox");
+		console.error("  --no-sandbox        Disable sandbox (overrides config)");
 		process.exit(1);
 	}
 
@@ -135,20 +143,48 @@ async function main(): Promise<void> {
 		}
 	}
 
+	// Initialize sandbox if configured
+	let sandboxEnabled = false;
+	const wantSandbox = parsed.sandbox ?? config.sandbox?.enabled ?? false;
+	if (wantSandbox) {
+		const sandboxConfig = config.sandbox ?? { enabled: true };
+		try {
+			const ok = await initializeSandbox(sandboxConfig);
+			if (ok) {
+				sandboxEnabled = true;
+				console.log(`Sandbox: enabled (${process.platform})`);
+			} else {
+				console.warn(
+					`Sandbox: not supported on ${process.platform} (requires macOS or Linux), running without sandbox`,
+				);
+			}
+		} catch (err) {
+			console.warn(
+				`Sandbox: initialization failed (${err instanceof Error ? err.message : err}), running without sandbox`,
+			);
+		}
+	}
+
 	// Create core components
 	const bus = new MessageBus();
-	const runner = new AgentRunner(config, mcpManager, codexClient, (channelType, chatId, text) => {
-		bus.enqueueMessage({
-			id: `async-agent-${Date.now()}`,
-			channelType,
-			chatId,
-			senderId: "ASYNC-AGENT",
-			senderName: "ASYNC-AGENT",
-			text,
-			timestamp: Date.now(),
-			attachments: [],
-		});
-	});
+	const runner = new AgentRunner(
+		config,
+		mcpManager,
+		codexClient,
+		(channelType, chatId, text) => {
+			bus.enqueueMessage({
+				id: `async-agent-${Date.now()}`,
+				channelType,
+				chatId,
+				senderId: "ASYNC-AGENT",
+				senderName: "ASYNC-AGENT",
+				text,
+				timestamp: Date.now(),
+				attachments: [],
+			});
+		},
+		sandboxEnabled,
+	);
 
 	// Start events watcher
 	const eventsDir = join(config.dataDir, "events");
@@ -216,6 +252,9 @@ async function main(): Promise<void> {
 	const shutdown = async () => {
 		console.log("\nShutting down...");
 		eventsWatcher.stop();
+		if (sandboxEnabled) {
+			await resetSandbox();
+		}
 		if (codexClient) {
 			await codexClient.stop();
 		}

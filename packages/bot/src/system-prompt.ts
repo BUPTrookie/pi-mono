@@ -20,10 +20,13 @@ export interface SystemPromptOptions {
 	codexEnabled?: boolean;
 	/** Available sub-agent types (name + description) */
 	agentTypes?: Array<{ name: string; description: string }>;
+	/** Whether OS-level sandbox is enabled */
+	sandboxEnabled?: boolean;
 }
 
 export function buildSystemPrompt(options: SystemPromptOptions): string {
-	const { dataDir, channelType, chatId, memory, botName, skillsText, codexEnabled, agentTypes } = options;
+	const { dataDir, channelType, chatId, memory, botName, skillsText, codexEnabled, agentTypes, sandboxEnabled } =
+		options;
 	const chatDir = `${dataDir}/${channelType}/${chatId}`;
 	const eventsDir = `${dataDir}/events`;
 	const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -150,7 +153,12 @@ ${chatDir}/
 ## Environment
 - Host machine, working directory: ${process.cwd()}
 - For current date/time: \`date\`
-- Previous conversation context (including tool results) is available.
+- Previous conversation context (including tool results) is available.${
+		sandboxEnabled
+			? `
+- **Sandbox active**: All commands run inside an OS-level sandbox. Network access is restricted to a set of allowed domains. File writes are limited to the working directory and /tmp. Sensitive paths (~/.ssh, ~/.aws, ~/.gnupg) are not readable. Do not attempt to access restricted resources.`
+			: ""
+	}
 
 ### Current Memory
 ${memory}

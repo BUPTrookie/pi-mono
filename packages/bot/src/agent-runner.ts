@@ -39,7 +39,7 @@ import type { BotConfig } from "./config.js";
 import { createTransformContext } from "./context-manager.js";
 import type { McpManager } from "./mcp-manager.js";
 import { NotificationQueue } from "./notification-queue.js";
-import { HostExecutor } from "./sandbox.js";
+import { type Executor, HostExecutor, SandboxExecutor } from "./sandbox.js";
 import { createBotSettingsManager, SessionStore } from "./session-store.js";
 import { runSubAgent } from "./sub-agent.js";
 import { buildSystemPrompt } from "./system-prompt.js";
@@ -109,13 +109,14 @@ interface RunnerEntry {
 export class AgentRunner {
 	private runners = new Map<string, RunnerEntry>();
 	private channels = new Map<string, Channel>();
-	private executor = new HostExecutor();
+	private executor: Executor;
 	private sessionStore: SessionStore;
 	private model: Model<any>;
 	private config: BotConfig;
 	private mcpManager?: McpManager;
 	private codexClient?: CodexClient;
 	private agentTypeRegistry: AgentTypeRegistry;
+	private sandboxEnabled: boolean;
 	private onAsyncNotification?: (channelType: string, chatId: string, text: string) => void;
 
 	constructor(
@@ -123,11 +124,14 @@ export class AgentRunner {
 		mcpManager?: McpManager,
 		codexClient?: CodexClient,
 		onAsyncNotification?: (channelType: string, chatId: string, text: string) => void,
+		sandboxEnabled?: boolean,
 	) {
 		this.config = config;
 		this.mcpManager = mcpManager;
 		this.codexClient = codexClient;
 		this.onAsyncNotification = onAsyncNotification;
+		this.sandboxEnabled = sandboxEnabled ?? false;
+		this.executor = sandboxEnabled ? new SandboxExecutor() : new HostExecutor();
 		this.sessionStore = new SessionStore(config.dataDir);
 		const model = resolveModel(config.model.provider, config.model.model);
 		// Allow overriding base URL (e.g., for China mainland BigModel endpoint)
@@ -385,6 +389,7 @@ export class AgentRunner {
 			skillsText,
 			codexEnabled: !!this.codexClient?.isRunning,
 			agentTypes,
+			sandboxEnabled: this.sandboxEnabled,
 		});
 
 		// Session manager with fixed context.jsonl per conversation
