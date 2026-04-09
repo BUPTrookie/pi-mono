@@ -1,0 +1,57 @@
+{
+	"name": "@mariozechner/pi-bot",
+	"version": "0.58.3",
+	"description": "Multi-platform IM bot assistant powered by pi agent",
+	"type": "module",
+	"bin": {
+		"bot": "dist/main.js"
+	},
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"files": [
+		"dist",
+		"skills",
+		"CHANGELOG.md"
+	],
+	"scripts": {
+		"clean": "shx rm -rf dist",
+		"build": "tsgo -p tsconfig.build.json && shx chmod +x dist/main.js",
+		"dev": "tsgo -p tsconfig.build.json --watch --preserveWatchOutput",
+		"prepublishOnly": "npm run clean && npm run build"
+	},
+	"dependencies": {
+		"@larksuiteoapi/node-sdk": "^1.45.0",
+		"@mariozechner/pi-agent-core": "^0.58.3",
+		"@mariozechner/pi-ai": "^0.58.3",
+		"@mariozechner/pi-coding-agent": "^0.58.3",
+		"@modelcontextprotocol/sdk": "^1.12.1",
+		"@sinclair/typebox": "^0.34.0",
+		"chalk": "^5.6.2",
+		"croner": "^9.1.0",
+		"diff": "^8.0.2",
+		"grammy": "^1.35.0",
+		"playwright": "^1.59.1"
+	},
+	"devDependencies": {
+		"@types/diff": "^7.0.2",
+		"@types/node": "^24.3.0",
+		"typescript": "^5.7.3"
+	},
+	"keywords": [
+		"telegram",
+		"bot",
+		"ai",
+		"agent",
+		"multi-platform"
+	],
+	"author": "Mario Zechner",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/badlogic/pi-mono.git",
+		"directory": "packages/bot"
+	},
+	"engines": {
+		"node": ">=20.0.0"
+	}
+}

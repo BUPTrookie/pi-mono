@@ -1,0 +1,27 @@
+{
+	"dataDir": "~/.bot/data",
+	"model": {
+		"provider": "zai",
+		"model": "glm-5-turbo",
+		"thinkingLevel": "off",
+		"baseUrl": "https://open.bigmodel.cn/api/coding/paas/v4",
+		"apiKey": "845c5137269c48a88f1d0ff515087e1d.bZC0tNFif8meVUKs"
+	},
+	"feishu": {
+		"appId": "cli_a93e6797fa789bd2",
+		"appSecret": "tcFBlqlrsdLFTkJ9VVnNRd13hQtyg3Aj",
+		"allowedUsers": []
+	},
+	"mcpServers": {
+		"chrome-devtools": {
+			"command": "npx",
+			"args": ["-y", "chrome-devtools-mcp@latest"]
+		}
+	},
+	"tavilyApiKey": "${TAVILY_API_KEY}",
+	"codex": {
+		"enabled": true,
+		"model": "o3",
+		"sandbox": "workspace-write"
+	}
+}
