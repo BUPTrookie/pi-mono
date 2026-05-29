@@ -1,4 +1,5 @@
 import type { AgentEvent, ThinkingLevel } from "@mariozechner/pi-agent-core";
+import type { Api, Model } from "@mariozechner/pi-ai";
 
 // --- Role types ---
 
@@ -58,6 +59,34 @@ export interface TeamPlan {
 	validationRules: string[];
 }
 
+export interface GeneratedContracts {
+	projectManifest: Record<string, unknown>;
+	openapi?: Record<string, unknown>;
+	dataModel?: Record<string, unknown>;
+	notes?: Record<string, unknown>;
+}
+
+export interface PlannerDiagnostic {
+	severity: "error" | "warning" | "info";
+	message: string;
+}
+
+export interface PlannerResult {
+	plan: TeamPlan;
+	contracts: GeneratedContracts;
+	diagnostics: PlannerDiagnostic[];
+}
+
+export interface PlannerOptions {
+	requirement: string;
+	model: Model<Api>;
+	getApiKey: (provider: string) => Promise<string | undefined> | string | undefined;
+	thinkingLevel?: ThinkingLevel;
+	signal?: AbortSignal;
+}
+
+export type PlannerRunner = (options: PlannerOptions) => Promise<PlannerResult>;
+
 // --- Task types ---
 
 export type TaskStatus = "pending" | "in_progress" | "completed" | "failed";
@@ -105,7 +134,7 @@ export interface TeamConfig {
 	requirement: string;
 	outputDir: string;
 	model: {
-		provider: string;
+		provider?: string;
 		model: string;
 		apiKey?: string;
 		baseUrl?: string;

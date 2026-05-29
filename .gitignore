@@ -21,6 +21,7 @@ packages/*/dist-firefox/
 *~
 
 # Package specific
+agent-team.json
 .npm/
 coverage/
 .nyc_output/

@@ -1,0 +1,10 @@
+{
+	"model": {
+		"provider": "zai",
+		"model": "glm-5.1",
+		"apiKey": "your-api-key-here"
+	},
+	"maxParallelAgents": 2,
+	"thinkingLevel": "off",
+	"maxRepairRounds": 2
+}

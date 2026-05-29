@@ -2,9 +2,10 @@
 
 import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
 import { resolve } from "path";
+import { findConfigFile, mergeConfig } from "./config.js";
 import { runTeam } from "./team/team-runner.js";
 import { runTeamTui } from "./tui/team-tui.js";
-import type { TeamConfig } from "./types.js";
+import type { InterventionMode, TeamConfig } from "./types.js";
 
 function isThinkingLevel(value: string): value is ThinkingLevel {
 	return (
@@ -17,8 +18,27 @@ function isThinkingLevel(value: string): value is ThinkingLevel {
 	);
 }
 
-function parseArgs(args: string[]): Partial<TeamConfig> & { help?: boolean; interactive?: boolean } {
-	const result: ReturnType<typeof parseArgs> = {};
+function isInterventionMode(value: string): value is InterventionMode {
+	return value === "none" || value === "approval" || value === "interactive";
+}
+
+interface ParsedArgs {
+	requirement?: string;
+	outputDir?: string;
+	model?: { provider?: string; model?: string; apiKey?: string; baseUrl?: string };
+	options?: {
+		maxParallelAgents?: number;
+		thinkingLevel?: ThinkingLevel;
+		maxRepairRounds?: number;
+		interventionMode?: InterventionMode;
+	};
+	configPath?: string;
+	help?: boolean;
+	interactive?: boolean;
+}
+
+function parseArgs(args: string[]): ParsedArgs {
+	const result: ParsedArgs = {};
 
 	for (let i = 0; i < args.length; i++) {
 		const arg = args[i];
@@ -29,30 +49,37 @@ function parseArgs(args: string[]): Partial<TeamConfig> & { help?: boolean; inte
 		} else if (arg === "--output" && i + 1 < args.length) {
 			result.outputDir = args[++i];
 		} else if (arg === "--model" && i + 1 < args.length) {
-			if (!result.model) result.model = { provider: "anthropic", model: "" };
+			if (!result.model) result.model = {};
 			result.model.model = args[++i];
 		} else if (arg === "--provider" && i + 1 < args.length) {
-			if (!result.model) result.model = { provider: "", model: "claude-sonnet-4-6" };
+			if (!result.model) result.model = {};
 			result.model.provider = args[++i];
 		} else if (arg === "--api-key" && i + 1 < args.length) {
-			if (!result.model) result.model = { provider: "anthropic", model: "claude-sonnet-4-6" };
+			if (!result.model) result.model = {};
 			result.model.apiKey = args[++i];
 		} else if (arg === "--base-url" && i + 1 < args.length) {
-			if (!result.model) result.model = { provider: "anthropic", model: "claude-sonnet-4-6" };
+			if (!result.model) result.model = {};
 			result.model.baseUrl = args[++i];
+		} else if (arg === "--config" && i + 1 < args.length) {
+			result.configPath = args[++i];
 		} else if (arg === "--max-parallel" && i + 1 < args.length) {
-			result.maxParallelAgents = parseInt(args[++i], 10);
+			if (!result.options) result.options = {};
+			result.options.maxParallelAgents = parseInt(args[++i], 10);
 		} else if (arg === "--thinking-level" && i + 1 < args.length) {
-			const thinkingLevel = args[++i];
-			if (isThinkingLevel(thinkingLevel)) result.thinkingLevel = thinkingLevel;
+			if (!result.options) result.options = {};
+			const level = args[++i];
+			if (isThinkingLevel(level)) result.options.thinkingLevel = level;
 		} else if (arg === "--max-repair-rounds" && i + 1 < args.length) {
-			result.maxRepairRounds = parseInt(args[++i], 10);
+			if (!result.options) result.options = {};
+			result.options.maxRepairRounds = parseInt(args[++i], 10);
 		} else if (arg === "--intervention-mode" && i + 1 < args.length) {
+			if (!result.options) result.options = {};
 			const mode = args[++i];
-			if (mode === "none" || mode === "approval" || mode === "interactive") result.interventionMode = mode;
+			if (isInterventionMode(mode)) result.options.interventionMode = mode;
 		} else if (arg === "--interactive") {
 			result.interactive = true;
-			result.interventionMode = "interactive";
+			if (!result.options) result.options = {};
+			result.options.interventionMode = "interactive";
 		}
 	}
 
@@ -65,19 +92,25 @@ function printHelp(): void {
 Usage:
   agent-team --requirement "Build a todo app" --output ./output
 
+Configuration (in order of priority):
+  1. CLI arguments (--model, --api-key, etc.)
+  2. Config file: ./agent-team.json or ~/.pi/agent-team.json
+  3. CLI defaults
+
 Options:
-  --requirement <text>   Project requirement description (required)
-  --output <path>        Output directory (required)
-  --model <id>           Model ID (default: claude-sonnet-4-6)
-  --provider <name>      Provider name (default: anthropic)
-  --api-key <key>        API key (alternative to env var)
-  --base-url <url>       Override model base URL
-  --max-parallel <n>     Max parallel agents (default: 2)
-  --max-repair-rounds <n> Max validation repair rounds (default: 2)
-  --thinking-level <lvl> Thinking level: off, minimal, low, medium, high, xhigh (default: off)
+  --requirement <text>       Project requirement description (required)
+  --output <path>            Output directory (required)
+  --config <path>            Path to config file (default: ./agent-team.json or ~/.pi/agent-team.json)
+  --model <id>               Model ID, supports "provider/model" format (e.g. "zai/glm-5.1")
+  --provider <name>          Provider name (overrides config file)
+  --api-key <key>            API key (overrides config file)
+  --base-url <url>           Override model base URL
+  --max-parallel <n>         Max parallel agents (default: 2)
+  --max-repair-rounds <n>    Max validation repair rounds (default: 2)
+  --thinking-level <lvl>     Thinking level: off, minimal, low, medium, high, xhigh
   --intervention-mode <mode> none, approval, interactive (default: none)
-  --interactive          Run the first-party TUI and enable approvals
-  -h, --help             Show this help message
+  --interactive              Run the TUI and enable approvals
+  -h, --help                 Show this help message
 `);
 }
 
@@ -101,24 +134,23 @@ async function main(): Promise<void> {
 		process.exit(1);
 	}
 
+	// Load config file and merge with CLI args
+	const fileConfig = findConfigFile(parsed.configPath);
+	const merged = mergeConfig(fileConfig, parsed.model, parsed.options);
+
 	const config: TeamConfig = {
 		requirement: parsed.requirement,
 		outputDir: resolve(parsed.outputDir),
-		model: {
-			provider: parsed.model?.provider ?? "anthropic",
-			model: parsed.model?.model ?? "claude-sonnet-4-6",
-			apiKey: parsed.model?.apiKey,
-			baseUrl: parsed.model?.baseUrl,
-		},
-		maxParallelAgents: parsed.maxParallelAgents ?? 2,
-		maxRepairRounds: parsed.maxRepairRounds ?? 2,
-		interventionMode: parsed.interventionMode ?? "none",
-		thinkingLevel: parsed.thinkingLevel,
+		model: merged.model,
+		maxParallelAgents: merged.maxParallelAgents,
+		maxRepairRounds: merged.maxRepairRounds,
+		interventionMode: merged.interventionMode,
+		thinkingLevel: merged.thinkingLevel,
 	};
 
 	console.log(`Requirement: ${config.requirement}`);
 	console.log(`Output base: ${config.outputDir}`);
-	console.log(`Model: ${config.model.provider}/${config.model.model}`);
+	console.log(`Model: ${config.model.provider ? `${config.model.provider}/` : ""}${config.model.model}`);
 	console.log("");
 
 	const result = parsed.interactive ? await runTeamTui(config) : await runTeam(config);

@@ -79,9 +79,7 @@ function isOpenApiPathRepresented(apiPath: string, projectText: string): boolean
 	if (projectText.includes(expressStyle)) return true;
 
 	// Pattern 3: meaningful segments only — ["polls", "votes"] or ["auth", "register"]
-	const segments = apiPath
-		.split("/")
-		.filter((s) => s && !s.startsWith("{") && s !== "api");
+	const segments = apiPath.split("/").filter((s) => s && !s.startsWith("{") && s !== "api");
 	if (segments.length >= 2) {
 		const tail = segments.join("/");
 		if (projectText.includes(tail)) return true;

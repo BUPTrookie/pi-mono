@@ -12,7 +12,14 @@ export { createRoleRegistry } from "./roles/role-registry.js";
 export { buildRoleSystemPrompt, getSystemPrompt } from "./roles/system-prompts.js";
 export { TaskGraph } from "./task/task-graph.js";
 export { TaskScheduler } from "./task/task-scheduler.js";
-export { createRepairTasks, createTeamPlan, taskFromSpec, writeContracts } from "./team/planner.js";
+export {
+	createRepairTasks,
+	createRoleRegistry as createPlanRoleRegistry,
+	llmPlannerRunner,
+	parsePlannerOutput,
+	taskFromSpec,
+	writeContracts,
+} from "./team/planner.js";
 export { TeamLead } from "./team/team-lead.js";
 export { createTeamRun, runTeam } from "./team/team-runner.js";
 export { validateTeamOutput } from "./team/validator.js";
@@ -21,7 +28,12 @@ export type {
 	AgentRoleName,
 	ApprovalDecision,
 	ContractSpec,
+	GeneratedContracts,
 	InterventionMode,
+	PlannerDiagnostic,
+	PlannerOptions,
+	PlannerResult,
+	PlannerRunner,
 	RepairTask,
 	RoleDefinition,
 	RoleSpec,

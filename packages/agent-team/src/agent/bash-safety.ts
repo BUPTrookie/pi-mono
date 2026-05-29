@@ -13,11 +13,13 @@ export interface BashSafetyOptions {
 	requestApproval?: (request: BashApprovalRequest) => Promise<ApprovalDecision>;
 }
 
-const WRITE_PATTERNS = [
-	/>/,
-	/\b(?:rm|del|erase|rmdir|move|mv|cp|copy|touch|ni|new-item|set-content|add-content|out-file)\b/i,
-	/\b(?:npm|pnpm|yarn|bun)\s+(?:install|add|remove|start|run\s+dev|run\s+build|test)\b/i,
-	/\b(?:docker|docker-compose)\s+(?:build|up|compose)\b/i,
+const DANGEROUS_PATTERNS = [
+	/\brm\s+.*(?:-[a-z]*[rf][a-z]*|\/s|\/q)/i,
+	/\b(?:del|erase|rmdir)\s+.*(?:\/s|\/q|-[a-z]*[rf][a-z]*)/i,
+	/\b(?:npm|pnpm|yarn|bun)\s+(?:install|add|remove|start|run\s+(?:dev|build|test|start)|test)\b/i,
+	/\bdocker\s+(?:build|up)\b/i,
+	/\bdocker\s+compose\s+(?:build|up)\b/i,
+	/\bdocker-compose\s+(?:build|up)\b/i,
 ];
 
 const SAFE_MKDIR_PATTERN = /^(?:mkdir|md)\s+(?:-p\s+)?[a-zA-Z0-9_./-]+(?:\s+[a-zA-Z0-9_./-]+)*$/i;
@@ -32,8 +34,8 @@ export function explainUnsafeBash(command: string): string | undefined {
 	const normalized = command.trim();
 	if (!normalized) return "Empty bash command is not useful for this task.";
 	if (isSafeDirectoryCreation(normalized)) return undefined;
-	if (WRITE_PATTERNS.some((pattern) => pattern.test(normalized))) {
-		return "Bash command may mutate files, install dependencies, start long-lived services, or consume excessive resources.";
+	if (DANGEROUS_PATTERNS.some((pattern) => pattern.test(normalized))) {
+		return "Bash command may delete files, install dependencies, start long-lived services, or consume excessive resources.";
 	}
 	return undefined;
 }

@@ -5,6 +5,7 @@ import { TaskGraph } from "../task/task-graph.js";
 import { TaskScheduler } from "../task/task-scheduler.js";
 import type {
 	ApprovalDecision,
+	PlannerRunner,
 	RoleDefinition,
 	Task,
 	TaskResult,
@@ -15,7 +16,7 @@ import type {
 	ValidationIssue,
 } from "../types.js";
 import { createLogger } from "../utils/logger.js";
-import { createRepairTasks, createRoleRegistry, createTeamPlan, taskFromSpec, writeContracts } from "./planner.js";
+import { createRepairTasks, createRoleRegistry, llmPlannerRunner, taskFromSpec, writeContracts } from "./planner.js";
 import { validateTeamOutput } from "./validator.js";
 
 const log = createLogger("team-lead");
@@ -101,6 +102,7 @@ export class TeamLead {
 			getInterventions: () => [],
 		},
 		private agentRunner: TeamAgentRunner = runTeamAgent,
+		private plannerRunner: PlannerRunner = llmPlannerRunner,
 	) {}
 
 	abort(): void {
@@ -116,8 +118,30 @@ export class TeamLead {
 		log.info(`Starting dynamic team orchestration for: ${requirement.slice(0, 80)}...`);
 		log.info(`Output directory: ${outputDir}`);
 
-		const plan = createTeamPlan(requirement);
-		writeContracts(outputDir, requirement, plan);
+		let plan: TeamPlan;
+		try {
+			const plannerResult = await this.plannerRunner({
+				requirement,
+				model: this.model,
+				getApiKey: this.getApiKey,
+				thinkingLevel: this.config.thinkingLevel,
+				signal,
+			});
+			plan = plannerResult.plan;
+			writeContracts(outputDir, plannerResult);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			const result: TeamResult = {
+				success: false,
+				outputDir,
+				tasks: [],
+				totalTurns: 0,
+				error: `Planning failed: ${message}`,
+			};
+			this.emit({ type: "run_end", result, timestamp: now() });
+			log.error(result.error ?? "Planning failed.");
+			return result;
+		}
 		this.emit({ type: "plan_created", plan, timestamp: now() });
 
 		const roleRegistry = createRoleRegistry(plan);

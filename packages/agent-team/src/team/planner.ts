@@ -1,8 +1,13 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { completeSimple } from "@mariozechner/pi-ai";
 import { buildRoleSystemPrompt } from "../roles/system-prompts.js";
 import type {
 	ContractSpec,
+	GeneratedContracts,
+	PlannerDiagnostic,
+	PlannerOptions,
+	PlannerResult,
 	RepairTask,
 	RoleDefinition,
 	RoleSpec,
@@ -12,9 +17,12 @@ import type {
 	ValidationIssue,
 } from "../types.js";
 
-function includesAny(text: string, terms: string[]): boolean {
-	const lower = text.toLowerCase();
-	return terms.some((term) => lower.includes(term));
+interface RawPlannerJson {
+	teamPlan?: unknown;
+	projectManifest?: unknown;
+	openapi?: unknown;
+	dataModel?: unknown;
+	notes?: unknown;
 }
 
 function roleFromSpec(spec: RoleSpec): RoleDefinition {
@@ -54,164 +62,293 @@ function contract(path: string, kind: ContractSpec["kind"], required: boolean): 
 	return { path, kind, required };
 }
 
-export function createTeamPlan(requirement: string): TeamPlan {
-	const hasApi = includesAny(requirement, [
-		"api",
-		"crud",
-		"backend",
-		"server",
-		"auth",
-		"login",
-		"database",
-		"db",
-		"poll",
-		"vote",
-		"sse",
-		"server-sent",
-	]);
-	const hasData = hasApi || includesAny(requirement, ["sqlite", "postgres", "mysql", "schema", "model", "store"]);
-	const hasFrontend = includesAny(requirement, [
-		"frontend",
-		"ui",
-		"web",
-		"page",
-		"dashboard",
-		"react",
-		"todo",
-		"poll",
-		"vote",
-		"tailwind",
-		"dark",
-		"full stack",
-		"full-stack",
-	]);
-	const hasDeployment = includesAny(requirement, ["docker", "deploy", "deployment", "compose", "production"]);
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
-	const contracts = [
-		contract("docs/contracts/team-plan.json", "team-plan", true),
-		contract("docs/contracts/project-manifest.json", "project-manifest", true),
-	];
-	if (hasApi) contracts.push(contract("docs/contracts/openapi.json", "openapi", true));
-	if (hasData) contracts.push(contract("docs/contracts/data-model.json", "data-model", true));
+function isStringArray(value: unknown): value is string[] {
+	return (
+		Array.isArray(value) &&
+		value.length > 0 &&
+		value.every((item) => typeof item === "string" && item.trim().length > 0)
+	);
+}
 
-	const roles: RoleSpec[] = [];
-	const tasks: TaskSpec[] = [];
+function asRecord(value: unknown, label: string): Record<string, unknown> {
+	if (!isRecord(value)) throw new Error(`${label} must be an object.`);
+	return value;
+}
 
-	if (hasApi) {
-		roles.push({
-			name: "api-builder",
-			description: "Implements the backend API and root package scripts from the contracts.",
-			allowedTools: ["read", "write", "edit", "bash", "grep", "find", "ls"],
-			ownedDirectories: ["src", "package.json", ".env.example"],
-			maxTurns: 40,
-		});
-		tasks.push({
-			id: "task-api",
-			role: "api-builder",
-			subject: "Backend API implementation",
-			description:
-				"Implement the backend application from docs/contracts/project-manifest.json, docs/contracts/openapi.json, and docs/contracts/data-model.json when present.",
-			dependencies: [],
-			ownedDirectories: ["src", "package.json", ".env.example"],
-			expectedOutputs: ["src", "package.json"],
-			acceptanceCriteria: [
-				"Root package.json contains scripts needed to run or check the backend.",
-				"Implemented routes match docs/contracts/openapi.json when that contract exists.",
-				"Data access matches docs/contracts/data-model.json when that contract exists.",
-			],
-		});
-	}
+function asString(value: unknown, label: string): string {
+	if (typeof value !== "string" || value.trim().length === 0) throw new Error(`${label} must be a non-empty string.`);
+	return value.trim();
+}
 
-	if (hasFrontend) {
-		roles.push({
-			name: "ui-builder",
-			description: "Implements the user interface and client-side API integration from the contracts.",
-			allowedTools: ["read", "write", "edit", "bash", "grep", "find", "ls"],
-			ownedDirectories: ["client"],
-			maxTurns: 40,
-		});
-		tasks.push({
-			id: "task-ui",
-			role: "ui-builder",
-			subject: "User interface implementation",
-			description:
-				"Implement the frontend in client/ from docs/contracts/project-manifest.json and docs/contracts/openapi.json when present.",
-			dependencies: hasApi ? ["task-api"] : [],
-			ownedDirectories: ["client"],
-			expectedOutputs: ["client"],
-			acceptanceCriteria: [
-				"UI covers the user-facing requirements.",
-				"Client API calls match docs/contracts/openapi.json when that contract exists.",
-				"Forms and error states are represented where the requirement needs them.",
-			],
-		});
-	}
+function asStringArray(value: unknown, label: string): string[] {
+	if (!isStringArray(value)) throw new Error(`${label} must be a non-empty string array.`);
+	return value.map((item) => item.trim());
+}
 
-	if (!hasApi && !hasFrontend) {
-		roles.push({
-			name: "project-builder",
-			description: "Implements the requested project from the contracts.",
-			allowedTools: ["read", "write", "edit", "bash", "grep", "find", "ls"],
-			ownedDirectories: ["src", "package.json", "README.md"],
-			maxTurns: 35,
-		});
-		tasks.push({
-			id: "task-build",
-			role: "project-builder",
-			subject: "Project implementation",
-			description: "Implement the requested project from docs/contracts/project-manifest.json.",
-			dependencies: [],
-			ownedDirectories: ["src", "package.json", "README.md"],
-			expectedOutputs: ["src", "package.json"],
-			acceptanceCriteria: [
-				"Implementation satisfies the project manifest.",
-				"README explains how to run the project.",
-			],
-		});
-	}
+function asOptionalStringArray(value: unknown, label: string): string[] {
+	if (value === undefined) return [];
+	if (!Array.isArray(value)) throw new Error(`${label} must be a string array when provided.`);
+	return value
+		.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+		.map((item) => item.trim());
+}
 
-	roles.push({
-		name: "integration-writer",
-		description:
-			"Writes project documentation and lightweight integration artifacts without running long-lived services.",
-		allowedTools: ["read", "write", "edit", "bash", "grep", "find", "ls"],
-		ownedDirectories: hasDeployment
-			? ["README.md", "scripts", "Dockerfile", "docker-compose.yml", ".env.example"]
-			: ["README.md", "scripts", ".env.example"],
-		maxTurns: 25,
-	});
-	tasks.push({
-		id: "task-integration",
-		role: "integration-writer",
-		subject: "Documentation and integration artifacts",
-		description:
-			"Read the contracts and implemented files. Write README.md, lightweight setup scripts, and deployment artifacts only when requested. Do not run npm install or start long-lived services.",
-		dependencies: tasks.map((task) => task.id),
-		ownedDirectories: hasDeployment
-			? ["README.md", "scripts", "Dockerfile", "docker-compose.yml", ".env.example"]
-			: ["README.md", "scripts", ".env.example"],
-		expectedOutputs: ["README.md"],
-		acceptanceCriteria: [
-			"README describes the project, contracts, setup, and run commands.",
-			"Scripts are lightweight and do not assume services are already running.",
-		],
-	});
-
+function normalizeRole(value: unknown, index: number): RoleSpec {
+	const role = asRecord(value, `teamPlan.roles[${index}]`);
+	const ownedDirectories = asStringArray(role.ownedDirectories, `teamPlan.roles[${index}].ownedDirectories`);
+	const allowedTools = asStringArray(role.allowedTools, `teamPlan.roles[${index}].allowedTools`);
 	return {
-		id: `plan-${Date.now()}`,
-		summary: hasApi
-			? "Dynamic API-oriented implementation plan generated from the user requirement."
-			: "Dynamic implementation plan generated from the user requirement.",
+		name: asString(role.name, `teamPlan.roles[${index}].name`),
+		description: asString(role.description, `teamPlan.roles[${index}].description`),
+		allowedTools,
+		ownedDirectories,
+		maxTurns: typeof role.maxTurns === "number" && role.maxTurns > 0 ? Math.floor(role.maxTurns) : 35,
+		systemPrompt:
+			typeof role.systemPrompt === "string" && role.systemPrompt.trim() ? role.systemPrompt.trim() : undefined,
+	};
+}
+
+function normalizeTask(value: unknown, index: number): TaskSpec {
+	const task = asRecord(value, `teamPlan.tasks[${index}]`);
+	return {
+		id: asString(task.id, `teamPlan.tasks[${index}].id`),
+		role: asString(task.role, `teamPlan.tasks[${index}].role`),
+		subject: asString(task.subject, `teamPlan.tasks[${index}].subject`),
+		description: asString(task.description, `teamPlan.tasks[${index}].description`),
+		dependencies: asOptionalStringArray(task.dependencies, `teamPlan.tasks[${index}].dependencies`),
+		ownedDirectories: asStringArray(task.ownedDirectories, `teamPlan.tasks[${index}].ownedDirectories`),
+		expectedOutputs: asStringArray(task.expectedOutputs, `teamPlan.tasks[${index}].expectedOutputs`),
+		acceptanceCriteria: asStringArray(task.acceptanceCriteria, `teamPlan.tasks[${index}].acceptanceCriteria`),
+	};
+}
+
+function validateSafePaths(paths: string[], label: string): void {
+	for (const path of paths) {
+		if (path.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(path) || path.split(/[\\/]/).includes("..")) {
+			throw new Error(`${label} contains unsafe path: ${path}`);
+		}
+	}
+}
+
+function buildContracts(raw: RawPlannerJson): GeneratedContracts {
+	const projectManifest = asRecord(raw.projectManifest, "projectManifest");
+	const contracts: GeneratedContracts = { projectManifest };
+	if (raw.openapi !== undefined) contracts.openapi = asRecord(raw.openapi, "openapi");
+	if (raw.dataModel !== undefined) contracts.dataModel = asRecord(raw.dataModel, "dataModel");
+	if (raw.notes !== undefined) contracts.notes = asRecord(raw.notes, "notes");
+	return contracts;
+}
+
+function validatePlannerJson(raw: RawPlannerJson): PlannerResult {
+	const planRecord = asRecord(raw.teamPlan, "teamPlan");
+	const rolesRaw = planRecord.roles;
+	const tasksRaw = planRecord.tasks;
+	if (!Array.isArray(rolesRaw) || rolesRaw.length === 0)
+		throw new Error("teamPlan.roles must contain at least one role.");
+	if (!Array.isArray(tasksRaw) || tasksRaw.length === 0)
+		throw new Error("teamPlan.tasks must contain at least one task.");
+
+	const roles = rolesRaw.map(normalizeRole);
+	const tasks = tasksRaw.map(normalizeTask);
+	const roleNames = new Set(roles.map((role) => role.name));
+	const taskIds = new Set<string>();
+	for (const role of roles) {
+		validateSafePaths(role.ownedDirectories, `role ${role.name} ownedDirectories`);
+	}
+	for (const task of tasks) {
+		if (taskIds.has(task.id)) throw new Error(`Duplicate task id: ${task.id}`);
+		taskIds.add(task.id);
+		if (!roleNames.has(task.role)) throw new Error(`Task ${task.id} references unknown role: ${task.role}`);
+		validateSafePaths(task.ownedDirectories, `task ${task.id} ownedDirectories`);
+		validateSafePaths(task.expectedOutputs, `task ${task.id} expectedOutputs`);
+	}
+	for (const task of tasks) {
+		for (const dependency of task.dependencies) {
+			if (!taskIds.has(dependency)) throw new Error(`Task ${task.id} references unknown dependency: ${dependency}`);
+			if (dependency === task.id) throw new Error(`Task ${task.id} cannot depend on itself.`);
+		}
+	}
+
+	const contracts = buildContracts(raw);
+	const plan: TeamPlan = {
+		id:
+			typeof planRecord.id === "string" && planRecord.id.trim().length > 0
+				? planRecord.id.trim()
+				: `plan-${Date.now()}`,
+		summary: asString(planRecord.summary, "teamPlan.summary"),
 		roles,
 		tasks,
-		contracts,
-		validationRules: [
-			"All required contract files must exist.",
-			"Task expected outputs must exist after execution.",
-			"OpenAPI paths must be represented by backend and frontend code when applicable.",
-			"Root package.json must be valid JSON and expose at least one useful script when present.",
+		contracts: [
+			contract("docs/contracts/team-plan.json", "team-plan", true),
+			contract("docs/contracts/project-manifest.json", "project-manifest", true),
+			...(contracts.openapi ? [contract("docs/contracts/openapi.json", "openapi", true)] : []),
+			...(contracts.dataModel ? [contract("docs/contracts/data-model.json", "data-model", true)] : []),
+			...(contracts.notes ? [contract("docs/contracts/notes.json", "notes", false)] : []),
 		],
+		validationRules: isStringArray(planRecord.validationRules)
+			? planRecord.validationRules
+			: [
+					"All required contract files must exist.",
+					"Task expected outputs must exist after execution.",
+					"Implementation must satisfy projectManifest and any generated OpenAPI/dataModel contracts.",
+				],
 	};
+
+	return { plan, contracts, diagnostics: [] };
+}
+
+function stripCodeFence(text: string): string {
+	const trimmed = text.trim();
+	const match = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(trimmed);
+	return match ? match[1].trim() : trimmed;
+}
+
+function extractJsonText(text: string): string {
+	const stripped = stripCodeFence(text);
+	const first = stripped.indexOf("{");
+	const last = stripped.lastIndexOf("}");
+	if (first === -1 || last === -1 || last <= first) return stripped;
+	return stripped.slice(first, last + 1);
+}
+
+export function parsePlannerOutput(text: string): PlannerResult {
+	const parsed = JSON.parse(extractJsonText(text)) as RawPlannerJson;
+	return validatePlannerJson(parsed);
+}
+
+function extractAssistantText(message: Awaited<ReturnType<typeof completeSimple>>): string {
+	return message.content
+		.filter((block) => block.type === "text")
+		.map((block) => block.text)
+		.join("\n")
+		.trim();
+}
+
+function plannerSystemPrompt(): string {
+	return `You are the Lead Planner for a dynamic AI engineering team.
+
+Your job is to understand the user's project globally and produce the collaboration contracts worker agents will implement.
+
+Return ONLY valid JSON. Do not use markdown.
+
+Required top-level shape:
+{
+  "teamPlan": {
+    "id": "short-plan-id",
+    "summary": "project summary",
+    "roles": [
+      {
+        "name": "role-id",
+        "description": "role purpose",
+        "allowedTools": ["read", "write", "edit", "bash", "grep", "find", "ls"],
+        "ownedDirectories": ["src"],
+        "maxTurns": 40,
+        "systemPrompt": "optional role-specific system prompt"
+      }
+    ],
+    "tasks": [
+      {
+        "id": "task-id",
+        "role": "role-id",
+        "subject": "task subject",
+        "description": "specific implementation instructions",
+        "dependencies": [],
+        "ownedDirectories": ["src"],
+        "expectedOutputs": ["src", "package.json"],
+        "acceptanceCriteria": ["concrete criterion"]
+      }
+    ],
+    "validationRules": ["project-specific validation rule"]
+  },
+  "projectManifest": {
+    "goal": "what to build",
+    "features": ["feature"],
+    "nonFunctionalRequirements": ["requirement"],
+    "implementationNotes": ["note"]
+  },
+  "openapi": { "openapi": "3.1.0", "info": {}, "paths": {} },
+  "dataModel": { "entities": [] },
+  "notes": { "risks": [], "handoff": [] }
+}
+
+Rules:
+- You decide roles, tasks, dependencies, contracts, and validation rules from the actual requirement.
+- Include openapi only if the project needs an HTTP API.
+- Include dataModel only if the project needs persistent or structured domain data.
+- Do not invent generic placeholder APIs or domain objects.
+- All paths must be relative to the project root. Never use absolute paths or ..
+- Every task role must exist in teamPlan.roles.
+- Every task dependency must reference an existing task id.
+- Contract files are communication artifacts for workers; make them specific enough to prevent drift.`;
+}
+
+function repairPrompt(requirement: string, previousOutput: string, error: string): string {
+	return `The previous planning JSON was invalid.
+
+Validation error:
+${error}
+
+Original project requirement:
+${requirement}
+
+Previous output:
+${previousOutput}
+
+Return corrected JSON only, using the required schema.`;
+}
+
+async function completePlannerJson(options: PlannerOptions, userPrompt: string): Promise<string> {
+	const apiKey = await options.getApiKey(options.model.provider);
+	const message = await completeSimple(
+		options.model,
+		{
+			systemPrompt: plannerSystemPrompt(),
+			messages: [{ role: "user", content: userPrompt, timestamp: Date.now() }],
+		},
+		{
+			apiKey,
+			reasoning: options.thinkingLevel === "off" ? undefined : options.thinkingLevel,
+			signal: options.signal,
+		},
+	);
+	if (message.stopReason === "error" || message.stopReason === "aborted") {
+		throw new Error(message.errorMessage ?? `Planner model stopped with ${message.stopReason}`);
+	}
+	return extractAssistantText(message);
+}
+
+export async function llmPlannerRunner(options: PlannerOptions): Promise<PlannerResult> {
+	const firstPrompt = `Project requirement:
+${options.requirement}
+
+Plan the team and generate contracts. Return JSON only.`;
+	const firstOutput = await completePlannerJson(options, firstPrompt);
+	try {
+		return parsePlannerOutput(firstOutput);
+	} catch (firstError) {
+		const firstMessage = firstError instanceof Error ? firstError.message : String(firstError);
+		const repairedOutput = await completePlannerJson(
+			options,
+			repairPrompt(options.requirement, firstOutput, firstMessage),
+		);
+		try {
+			const result = parsePlannerOutput(repairedOutput);
+			const diagnostic: PlannerDiagnostic = {
+				severity: "warning",
+				message: `Planner output required one repair attempt: ${firstMessage}`,
+			};
+			return { ...result, diagnostics: [diagnostic, ...result.diagnostics] };
+		} catch (secondError) {
+			const secondMessage = secondError instanceof Error ? secondError.message : String(secondError);
+			throw new Error(
+				`Planner failed after repair attempt. Initial error: ${firstMessage}. Repair error: ${secondMessage}`,
+			);
+		}
+	}
 }
 
 function writeJson(outputDir: string, relativePath: string, value: unknown): void {
@@ -220,248 +357,12 @@ function writeJson(outputDir: string, relativePath: string, value: unknown): voi
 	writeFileSync(absolutePath, `${JSON.stringify(value, null, 2)}\n`, "utf-8");
 }
 
-function buildProjectManifest(requirement: string, plan: TeamPlan): Record<string, unknown> {
-	return {
-		requirement,
-		summary: plan.summary,
-		features: inferFeatures(requirement),
-		tasks: plan.tasks.map((task) => ({
-			id: task.id,
-			role: task.role,
-			subject: task.subject,
-			expectedOutputs: task.expectedOutputs,
-			acceptanceCriteria: task.acceptanceCriteria,
-		})),
-	};
-}
-
-function inferFeatures(requirement: string): string[] {
-	const features: string[] = [];
-	if (includesAny(requirement, ["auth", "login", "register", "session"])) {
-		features.push("session-based authentication", "user registration and login");
-	}
-	if (includesAny(requirement, ["poll", "vote"])) {
-		features.push("poll creation", "single vote per user per poll", "poll expiration");
-	}
-	if (includesAny(requirement, ["sse", "server-sent", "real-time", "realtime", "实时"])) {
-		features.push("server-sent events for realtime updates");
-	}
-	if (includesAny(requirement, ["search", "filter", "active", "expired", "my polls"])) {
-		features.push("search and status/ownership filters");
-	}
-	if (includesAny(requirement, ["tailwind", "dark"])) {
-		features.push("Tailwind CSS dark theme");
-	}
-	if (includesAny(requirement, ["validation", "error"])) {
-		features.push("input validation and user-facing errors");
-	}
-	return features;
-}
-
-function response(description: string): Record<string, unknown> {
-	return { description };
-}
-
-function requestJson(required: string[]): Record<string, unknown> {
-	return {
-		required: true,
-		content: {
-			"application/json": {
-				schema: {
-					type: "object",
-					required,
-					additionalProperties: true,
-				},
-			},
-		},
-	};
-}
-
-function buildOpenApi(requirement: string): Record<string, unknown> {
-	const wantsAuth = includesAny(requirement, ["auth", "login", "user"]);
-	const wantsPolling = includesAny(requirement, ["poll", "vote"]);
-	const wantsSse = includesAny(requirement, ["sse", "server-sent", "real-time", "realtime", "实时"]);
-	if (wantsPolling) {
-		const paths: Record<string, unknown> = {
-			"/api/auth/register": {
-				post: {
-					summary: "Register a user and create a session",
-					requestBody: requestJson(["email", "password", "name"]),
-					responses: { "201": response("Registered"), "400": response("Validation error") },
-				},
-			},
-			"/api/auth/login": {
-				post: {
-					summary: "Login with session-based authentication",
-					requestBody: requestJson(["email", "password"]),
-					responses: { "200": response("Authenticated"), "401": response("Invalid credentials") },
-				},
-			},
-			"/api/auth/logout": {
-				post: { summary: "Destroy current session", responses: { "204": response("Logged out") } },
-			},
-			"/api/me": {
-				get: {
-					summary: "Get the current authenticated user",
-					responses: { "200": response("Current user"), "401": response("Unauthenticated") },
-				},
-			},
-			"/api/polls": {
-				get: {
-					summary: "List polls with search and filters",
-					parameters: [
-						{ name: "q", in: "query", schema: { type: "string" } },
-						{ name: "status", in: "query", schema: { type: "string", enum: ["active", "expired"] } },
-						{ name: "mine", in: "query", schema: { type: "boolean" } },
-					],
-					responses: { "200": response("Poll list") },
-				},
-				post: {
-					summary: "Create a poll with options and expiration",
-					requestBody: requestJson(["title", "options", "expiresAt"]),
-					responses: {
-						"201": response("Poll created"),
-						"400": response("Validation error"),
-						"401": response("Unauthenticated"),
-					},
-				},
-			},
-			"/api/polls/{pollId}": {
-				get: {
-					summary: "Get poll details and current results",
-					parameters: [{ name: "pollId", in: "path", required: true, schema: { type: "string" } }],
-					responses: { "200": response("Poll details"), "404": response("Poll not found") },
-				},
-			},
-			"/api/polls/{pollId}/votes": {
-				post: {
-					summary: "Cast one vote for a poll option; each user may vote once per poll",
-					parameters: [{ name: "pollId", in: "path", required: true, schema: { type: "string" } }],
-					requestBody: requestJson(["optionId"]),
-					responses: {
-						"201": response("Vote recorded"),
-						"400": response("Invalid or expired poll"),
-						"401": response("Unauthenticated"),
-						"409": response("User already voted on this poll"),
-					},
-				},
-			},
-		};
-		if (wantsSse) {
-			paths["/api/polls/{pollId}/events"] = {
-				get: {
-					summary: "Subscribe to Server-Sent Events for poll result updates",
-					parameters: [{ name: "pollId", in: "path", required: true, schema: { type: "string" } }],
-					responses: { "200": { description: "text/event-stream poll updates" } },
-				},
-			};
-		}
-
-		return {
-			openapi: "3.1.0",
-			info: { title: "Realtime polling API", version: "0.1.0" },
-			paths,
-		};
-	}
-
-	const noun = includesAny(requirement, ["todo", "task"]) ? "todos" : "items";
-	const paths: Record<string, unknown> = {
-		[`/api/${noun}`]: {
-			get: { summary: `List ${noun}`, responses: { "200": { description: "Success" } } },
-			post: { summary: `Create ${noun.slice(0, -1) || noun}`, responses: { "201": { description: "Created" } } },
-		},
-		[`/api/${noun}/{id}`]: {
-			get: { summary: `Get ${noun.slice(0, -1) || noun}`, responses: { "200": { description: "Success" } } },
-			put: { summary: `Update ${noun.slice(0, -1) || noun}`, responses: { "200": { description: "Success" } } },
-			delete: { summary: `Delete ${noun.slice(0, -1) || noun}`, responses: { "204": { description: "Deleted" } } },
-		},
-	};
-	if (wantsAuth) {
-		paths["/api/auth/login"] = {
-			post: { summary: "Login", responses: { "200": { description: "Authenticated" } } },
-		};
-	}
-
-	return {
-		openapi: "3.1.0",
-		info: { title: "Generated project API", version: "0.1.0" },
-		paths,
-	};
-}
-
-function buildDataModel(requirement: string): Record<string, unknown> {
-	if (includesAny(requirement, ["poll", "vote"])) {
-		return {
-			entities: [
-				{
-					name: "User",
-					fields: [
-						{ name: "id", type: "string", required: true },
-						{ name: "email", type: "string", required: true, unique: true },
-						{ name: "name", type: "string", required: true },
-						{ name: "passwordHash", type: "string", required: true },
-						{ name: "createdAt", type: "datetime", required: true },
-					],
-				},
-				{
-					name: "Poll",
-					fields: [
-						{ name: "id", type: "string", required: true },
-						{ name: "creatorId", type: "string", required: true, references: "User.id" },
-						{ name: "title", type: "string", required: true },
-						{ name: "description", type: "string", required: false },
-						{ name: "expiresAt", type: "datetime", required: true },
-						{ name: "createdAt", type: "datetime", required: true },
-					],
-				},
-				{
-					name: "PollOption",
-					fields: [
-						{ name: "id", type: "string", required: true },
-						{ name: "pollId", type: "string", required: true, references: "Poll.id" },
-						{ name: "label", type: "string", required: true },
-					],
-				},
-				{
-					name: "Vote",
-					fields: [
-						{ name: "id", type: "string", required: true },
-						{ name: "pollId", type: "string", required: true, references: "Poll.id" },
-						{ name: "optionId", type: "string", required: true, references: "PollOption.id" },
-						{ name: "userId", type: "string", required: true, references: "User.id" },
-						{ name: "createdAt", type: "datetime", required: true },
-					],
-					constraints: ["unique(pollId,userId)"],
-				},
-			],
-		};
-	}
-
-	const entity = includesAny(requirement, ["todo", "task"]) ? "Todo" : "Item";
-	return {
-		entities: [
-			{
-				name: entity,
-				fields: [
-					{ name: "id", type: "string", required: true },
-					{ name: "title", type: "string", required: true },
-					{ name: "createdAt", type: "datetime", required: true },
-					{ name: "updatedAt", type: "datetime", required: false },
-				],
-			},
-		],
-	};
-}
-
-export function writeContracts(outputDir: string, requirement: string, plan: TeamPlan): void {
-	writeJson(outputDir, "docs/contracts/team-plan.json", plan);
-	writeJson(outputDir, "docs/contracts/project-manifest.json", buildProjectManifest(requirement, plan));
-	if (plan.contracts.some((item) => item.kind === "openapi")) {
-		writeJson(outputDir, "docs/contracts/openapi.json", buildOpenApi(requirement));
-	}
-	if (plan.contracts.some((item) => item.kind === "data-model")) {
-		writeJson(outputDir, "docs/contracts/data-model.json", buildDataModel(requirement));
-	}
+export function writeContracts(outputDir: string, result: PlannerResult): void {
+	writeJson(outputDir, "docs/contracts/team-plan.json", result.plan);
+	writeJson(outputDir, "docs/contracts/project-manifest.json", result.contracts.projectManifest);
+	if (result.contracts.openapi) writeJson(outputDir, "docs/contracts/openapi.json", result.contracts.openapi);
+	if (result.contracts.dataModel) writeJson(outputDir, "docs/contracts/data-model.json", result.contracts.dataModel);
+	if (result.contracts.notes) writeJson(outputDir, "docs/contracts/notes.json", result.contracts.notes);
 }
 
 export function createRepairTasks(plan: TeamPlan, issues: ValidationIssue[], round: number): RepairTask[] {

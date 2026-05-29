@@ -51,38 +51,59 @@ function uniqueDir(basePath: string, name: string): string {
 	return join(basePath, `${name}-${i}`);
 }
 
-function resolveModelFromRegistry(
+/**
+ * Resolve a model reference using ModelRegistry.
+ * Supports:
+ *   - provider + model: find("zai", "glm-5.1")
+ *   - model only: search all providers for exact match, pick the first
+ *   - "provider/model" format in model string: parse and resolve
+ *   - model + baseUrl: apply baseUrl override
+ */
+function resolveModel(
 	registry: ModelRegistry,
-	provider: string,
+	provider: string | undefined,
 	modelId: string,
 	baseUrl?: string,
 ): Model<Api> {
-	const exact = registry.find(provider, modelId);
-	if (exact) {
-		// Custom baseUrl with a third-party endpoint must use openai-completions,
-		// not openai-responses — most compatible endpoints only implement Chat Completions.
-		if (baseUrl && exact.api === "openai-responses") {
-			return { ...exact, baseUrl, api: "openai-completions" } as Model<Api>;
-		}
-		return baseUrl ? { ...exact, baseUrl } : exact;
+	// Parse "provider/model" format
+	let resolvedProvider = provider;
+	let resolvedModelId = modelId;
+	if (!resolvedProvider && modelId.includes("/")) {
+		const slashIdx = modelId.indexOf("/");
+		resolvedProvider = modelId.substring(0, slashIdx);
+		resolvedModelId = modelId.substring(slashIdx + 1);
 	}
 
-	const providerModels = registry.getAll().filter((model) => model.provider === provider);
-	if (providerModels.length > 0) {
-		const fallback = providerModels[0];
-		// Same: custom baseUrl → force openai-completions
-		const api = baseUrl && fallback.api === "openai-responses" ? ("openai-completions" as Api) : fallback.api;
-		return {
-			...fallback,
-			id: modelId,
-			name: modelId,
-			api,
-			baseUrl: baseUrl ?? fallback.baseUrl,
-		} as Model<Api>;
+	// Exact match with provider
+	if (resolvedProvider) {
+		const exact = registry.find(resolvedProvider, resolvedModelId);
+		if (exact) {
+			return baseUrl ? { ...exact, baseUrl } : exact;
+		}
+
+		// Provider exists but model not found — build a custom model from provider template
+		const providerModels = registry.getAll().filter((m) => m.provider === resolvedProvider);
+		if (providerModels.length > 0) {
+			const template = providerModels[0];
+			return {
+				...template,
+				id: resolvedModelId,
+				name: resolvedModelId,
+				baseUrl: baseUrl ?? template.baseUrl,
+			} as Model<Api>;
+		}
+	}
+
+	// No provider — search all providers for model ID
+	const allModels = registry.getAll();
+	const match = allModels.find((m) => m.id === resolvedModelId);
+	if (match) {
+		return baseUrl ? { ...match, baseUrl } : match;
 	}
 
 	throw new Error(
-		`Model not found: ${provider}/${modelId}. Add the provider/model to models.json or use a known provider from ModelRegistry.`,
+		`Model not found: ${resolvedProvider ? `${resolvedProvider}/` : ""}${resolvedModelId}. ` +
+			`Use a known provider/model from ModelRegistry, or create agent-team.json with model config.`,
 	);
 }
 
@@ -152,16 +173,22 @@ class DynamicTeamRun implements TeamRun {
 
 		const projectConfig = this.prepareProjectConfig();
 		const authStorage = AuthStorage.create(join(homedir(), ".pi", "auth.json"));
-		if (projectConfig.model.apiKey) {
-			authStorage.setRuntimeApiKey(projectConfig.model.provider, projectConfig.model.apiKey);
+		const resolvedProvider = projectConfig.model.provider;
+		if (projectConfig.model.apiKey && resolvedProvider) {
+			authStorage.setRuntimeApiKey(resolvedProvider, projectConfig.model.apiKey);
 		}
 		const modelRegistry = ModelRegistry.create(authStorage);
-		const model = resolveModelFromRegistry(
+		const model = resolveModel(
 			modelRegistry,
-			projectConfig.model.provider,
+			resolvedProvider,
 			projectConfig.model.model,
 			projectConfig.model.baseUrl,
 		);
+
+		// Set API key for the resolved provider if it differs from the configured one
+		if (projectConfig.model.apiKey && model.provider !== resolvedProvider) {
+			authStorage.setRuntimeApiKey(model.provider, projectConfig.model.apiKey);
+		}
 
 		const getApiKey = async (provider: string) => {
 			if (projectConfig.model.apiKey) return projectConfig.model.apiKey;

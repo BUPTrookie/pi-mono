@@ -2,21 +2,70 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { createTeamPlan, writeContracts } from "../src/team/planner.js";
+import { writeContracts } from "../src/team/planner.js";
 import { validateTeamOutput } from "../src/team/validator.js";
+import type { PlannerResult } from "../src/types.js";
 
 function tempProject(): string {
 	return join(tmpdir(), `agent-team-validator-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+}
+
+function plannerResult(): PlannerResult {
+	return {
+		plan: {
+			id: "test-plan",
+			summary: "Test API project",
+			roles: [
+				{
+					name: "api-builder",
+					description: "Builds the API",
+					allowedTools: ["read", "write", "edit", "bash", "grep", "find", "ls"],
+					ownedDirectories: ["src"],
+					maxTurns: 30,
+				},
+			],
+			tasks: [
+				{
+					id: "task-api",
+					role: "api-builder",
+					subject: "Build API",
+					description: "Implement the API from contracts.",
+					dependencies: [],
+					ownedDirectories: ["src"],
+					expectedOutputs: ["src/index.js", "package.json"],
+					acceptanceCriteria: ["API routes match OpenAPI."],
+				},
+			],
+			contracts: [
+				{ path: "docs/contracts/team-plan.json", kind: "team-plan", required: true },
+				{ path: "docs/contracts/project-manifest.json", kind: "project-manifest", required: true },
+				{ path: "docs/contracts/openapi.json", kind: "openapi", required: true },
+			],
+			validationRules: ["Expected files exist.", "OpenAPI routes are represented in source."],
+		},
+		contracts: {
+			projectManifest: { goal: "Build a test API", features: ["health", "items"] },
+			openapi: {
+				openapi: "3.1.0",
+				info: { title: "Test API", version: "1.0.0" },
+				paths: {
+					"/api/health": {},
+					"/api/things/{thingId}/votes": {},
+				},
+			},
+		},
+		diagnostics: [],
+	};
 }
 
 describe("validator", () => {
 	it("detects missing task outputs", () => {
 		const outputDir = tempProject();
 		mkdirSync(outputDir, { recursive: true });
-		const plan = createTeamPlan("Build a todo CRUD API");
-		writeContracts(outputDir, "Build a todo CRUD API", plan);
+		const result = plannerResult();
+		writeContracts(outputDir, result);
 
-		const issues = validateTeamOutput(outputDir, plan);
+		const issues = validateTeamOutput(outputDir, result.plan);
 
 		expect(issues.some((issue) => issue.id.startsWith("missing-output-task-api"))).toBe(true);
 	});
@@ -24,8 +73,8 @@ describe("validator", () => {
 	it("detects OpenAPI paths that are not represented in code", () => {
 		const outputDir = tempProject();
 		mkdirSync(join(outputDir, "src"), { recursive: true });
-		const plan = createTeamPlan("Build a todo CRUD API");
-		writeContracts(outputDir, "Build a todo CRUD API", plan);
+		const result = plannerResult();
+		writeContracts(outputDir, result);
 		writeFileSync(
 			join(outputDir, "package.json"),
 			JSON.stringify({ scripts: { start: "node src/index.js" } }),
@@ -33,7 +82,7 @@ describe("validator", () => {
 		);
 		writeFileSync(join(outputDir, "src/index.js"), "console.log('server')", "utf-8");
 
-		const issues = validateTeamOutput(outputDir, plan);
+		const issues = validateTeamOutput(outputDir, result.plan);
 
 		expect(issues.some((issue) => issue.id.startsWith("missing-openapi-path"))).toBe(true);
 	});
