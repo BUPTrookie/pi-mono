@@ -62,6 +62,34 @@ function getOpenApiPaths(outputDir: string): string[] {
 	return Object.keys(paths);
 }
 
+/**
+ * Check whether an OpenAPI path (e.g. /api/polls/{pollId}/votes) is represented
+ * in the project source text. Matches against multiple patterns:
+ *   - The path with params removed and slashes collapsed: /api/polls/votes
+ *   - Express-style route: /api/polls/:pollId/votes
+ *   - Just the meaningful segments joined: polls/votes
+ */
+function isOpenApiPathRepresented(apiPath: string, projectText: string): boolean {
+	// Pattern 1: collapse {param} segments — /api/polls/{pollId}/votes → /api/polls/votes
+	const collapsed = apiPath.replace(/\/\{[^}]+\}/g, "/");
+	if (projectText.includes(collapsed)) return true;
+
+	// Pattern 2: Express :param style — /api/polls/:pollId/votes
+	const expressStyle = apiPath.replace(/\{([^}]+)\}/g, ":$1");
+	if (projectText.includes(expressStyle)) return true;
+
+	// Pattern 3: meaningful segments only — ["polls", "votes"] or ["auth", "register"]
+	const segments = apiPath
+		.split("/")
+		.filter((s) => s && !s.startsWith("{") && s !== "api");
+	if (segments.length >= 2) {
+		const tail = segments.join("/");
+		if (projectText.includes(tail)) return true;
+	}
+
+	return false;
+}
+
 export function validateTeamOutput(outputDir: string, plan: TeamPlan): ValidationIssue[] {
 	const issues: ValidationIssue[] = [];
 
@@ -117,21 +145,19 @@ export function validateTeamOutput(outputDir: string, plan: TeamPlan): Validatio
 	const openApiPaths = getOpenApiPaths(outputDir);
 	if (openApiPaths.length > 0) {
 		const projectText = readProjectText(outputDir);
-		for (const path of openApiPaths) {
-			const normalized = path.replace(/\{[^}]+\}/g, "");
-			if (!projectText.includes(normalized)) {
-				issues.push(
-					issue(
-						`missing-openapi-path-${path.replace(/[^a-z0-9]+/gi, "-")}`,
-						`OpenAPI path is not represented in implementation: ${path}`,
-						{
-							severity: "error",
-							ownerTaskId: "task-api",
-							ownerRole: "api-builder",
-						},
-					),
-				);
-			}
+		for (const apiPath of openApiPaths) {
+			if (isOpenApiPathRepresented(apiPath, projectText)) continue;
+			issues.push(
+				issue(
+					`missing-openapi-path-${apiPath.replace(/[^a-z0-9]+/gi, "-")}`,
+					`OpenAPI path is not represented in implementation: ${apiPath}`,
+					{
+						severity: "error",
+						ownerTaskId: "task-api",
+						ownerRole: "api-builder",
+					},
+				),
+			);
 		}
 	}
 
