@@ -1,0 +1,58 @@
+{
+	"name": "@mariozechner/pi-agent-team",
+	"version": "0.65.2",
+	"description": "Multi-agent team orchestrator for full-stack development",
+	"type": "module",
+	"bin": {
+		"agent-team": "dist/main.js"
+	},
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"files": [
+		"dist",
+		"CHANGELOG.md"
+	],
+	"scripts": {
+		"clean": "shx rm -rf dist",
+		"build": "tsgo -p tsconfig.build.json && shx chmod +x dist/main.js",
+		"dev": "tsgo -p tsconfig.build.json --watch --preserveWatchOutput",
+		"test": "vitest --run",
+		"prepublishOnly": "npm run clean && npm run build"
+	},
+	"dependencies": {
+		"@mariozechner/pi-agent-core": "^0.65.2",
+		"@mariozechner/pi-ai": "^0.65.2",
+		"@mariozechner/pi-coding-agent": "^0.65.2",
+		"@mariozechner/pi-tui": "^0.65.2",
+		"chalk": "^5.6.2"
+	},
+	"devDependencies": {
+		"@types/node": "^24.3.0",
+		"shx": "^0.4.0",
+		"typescript": "^5.7.3",
+		"vitest": "^3.2.4"
+	},
+	"keywords": [
+		"agent",
+		"team",
+		"multi-agent",
+		"full-stack"
+	],
+	"author": "Mario Zechner",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/badlogic/pi-mono.git",
+		"directory": "packages/agent-team"
+	},
+	"engines": {
+		"node": ">=20.0.0"
+	},
+	"directories": {
+		"test": "test"
+	},
+	"bugs": {
+		"url": "https://github.com/badlogic/pi-mono/issues"
+	},
+	"homepage": "https://github.com/badlogic/pi-mono#readme"
+}
