@@ -89,7 +89,9 @@ describe("TeamLead dynamic run", () => {
 		const outputDir = tempProject();
 		mkdirSync(outputDir, { recursive: true });
 		const events: TeamEvent[] = [];
-		const runner: TeamAgentRunner = async (_description, agentConfig) => {
+		const descriptions: string[] = [];
+		const runner: TeamAgentRunner = async (description, agentConfig) => {
+			descriptions.push(description);
 			if (agentConfig.taskId?.startsWith("repair-")) {
 				mkdirSync(join(agentConfig.outputDir, "src"), { recursive: true });
 				writeFileSync(join(agentConfig.outputDir, "src/index.js"), "console.log('ok')", "utf-8");
@@ -121,6 +123,8 @@ describe("TeamLead dynamic run", () => {
 		expect(events.map((event) => event.type)).toContain("validation_start");
 		expect(events.map((event) => event.type)).toContain("repair_requested");
 		expect(events[events.length - 1].type).toBe("run_end");
+		expect(descriptions[0]).toContain("Self-check before finishing");
+		expect(descriptions[0]).toContain("npm run check or npm test");
 	});
 
 	it("fails clearly when planning fails and does not start workers", async () => {

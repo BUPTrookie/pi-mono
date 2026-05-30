@@ -14,6 +14,14 @@ describe("bash safety", () => {
 		expect(explainUnsafeBash("mv a b")).toBeUndefined();
 	});
 
+	it("allows local self-check commands", () => {
+		expect(explainUnsafeBash("npm run check")).toBeUndefined();
+		expect(explainUnsafeBash("npm test")).toBeUndefined();
+		expect(explainUnsafeBash("npm run test:unit")).toBeUndefined();
+		expect(explainUnsafeBash("npm run build")).toBeUndefined();
+		expect(explainUnsafeBash("node --check src/index.js")).toBeUndefined();
+	});
+
 	it("blocks destructive, dependency, docker, and service commands", () => {
 		expect(explainUnsafeBash("rm -rf src")).toBeDefined();
 		expect(explainUnsafeBash("npm install")).toBeDefined();
@@ -21,5 +29,6 @@ describe("bash safety", () => {
 		expect(explainUnsafeBash("docker build .")).toBeDefined();
 		expect(explainUnsafeBash("docker compose up")).toBeDefined();
 		expect(explainUnsafeBash("npm start")).toBeDefined();
+		expect(explainUnsafeBash("npm run dev")).toBeDefined();
 	});
 });

@@ -17,7 +17,7 @@ import type {
 } from "../types.js";
 import { createLogger } from "../utils/logger.js";
 import { createRepairTasks, createRoleRegistry, llmPlannerRunner, taskFromSpec, writeContracts } from "./planner.js";
-import { validateTeamOutput } from "./validator.js";
+import { validateTeamOutputWithChecks } from "./validator.js";
 
 const log = createLogger("team-lead");
 
@@ -30,6 +30,11 @@ export interface TeamLeadControls {
 }
 
 export type TeamAgentRunner = (taskDescription: string, config: TeamAgentConfig) => Promise<TaskResult>;
+export type TeamValidatorRunner = (
+	outputDir: string,
+	plan: TeamPlan,
+	signal?: AbortSignal,
+) => Promise<ValidationIssue[]>;
 
 function now(): number {
 	return Date.now();
@@ -72,6 +77,13 @@ ${outputs.join("\n")}
 Acceptance criteria:
 ${criteria.join("\n")}
 
+Self-check before finishing:
+- Run the narrowest relevant checks for your owned area after writing files.
+- Backend tasks should at minimum run syntax/load checks such as node --check on changed JS files and npm run check or npm test when those scripts exist.
+- Frontend tasks should run npm run check, npm test, or npm run build when those scripts exist.
+- If a check fails, fix the issue and rerun the check before finalizing.
+- Do not run dependency installation or long-lived service commands; the Lead runs controlled install and whole-project validation.
+
 Do not rely on prior agent prose summaries. Use the contract files and the actual files in the workspace as source of truth.${interventionText}`;
 }
 
@@ -103,6 +115,7 @@ export class TeamLead {
 		},
 		private agentRunner: TeamAgentRunner = runTeamAgent,
 		private plannerRunner: PlannerRunner = llmPlannerRunner,
+		private validatorRunner: TeamValidatorRunner = validateTeamOutputWithChecks,
 	) {}
 
 	abort(): void {
@@ -156,7 +169,7 @@ export class TeamLead {
 			totalTurns += runResult.turns;
 
 			this.emit({ type: "validation_start", round, timestamp: now() });
-			const issues = validateTeamOutput(outputDir, plan);
+			const issues = await this.validatorRunner(outputDir, plan, signal);
 			this.validationIssues = issues;
 			this.emit({ type: "validation_end", round, issues, timestamp: now() });
 

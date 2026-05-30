@@ -22,7 +22,7 @@ export {
 } from "./team/planner.js";
 export { TeamLead } from "./team/team-lead.js";
 export { createTeamRun, runTeam } from "./team/team-runner.js";
-export { validateTeamOutput } from "./team/validator.js";
+export { type RuntimeValidationOptions, validateTeamOutput, validateTeamOutputWithChecks } from "./team/validator.js";
 export { runTeamTui } from "./tui/team-tui.js";
 export type {
 	AgentRoleName,
