@@ -45,17 +45,15 @@ function plannerJson(domain: "polling" | "commerce"): string {
 			roles: [
 				{
 					name: "builder",
+					profile: "backend-engineer",
 					description: "Implements the planned project",
-					allowedTools: ["read", "write", "edit", "bash", "grep", "find", "ls"],
 					ownedDirectories: ["src", "client"],
-					maxTurns: 40,
 				},
 				{
 					name: "validator",
+					profile: "e2e-verifier",
 					description: "Checks implementation against contracts",
-					allowedTools: ["read", "bash", "grep", "find", "ls"],
-					ownedDirectories: ["docs"],
-					maxTurns: 20,
+					ownedDirectories: ["tests/e2e", "docs/e2e-report.md"],
 				},
 			],
 			tasks: [
@@ -75,9 +73,9 @@ function plannerJson(domain: "polling" | "commerce"): string {
 					subject: "Validate application",
 					description: "Check generated output against contracts.",
 					dependencies: ["build-app"],
-					ownedDirectories: ["docs"],
-					expectedOutputs: ["README.md"],
-					acceptanceCriteria: ["Validation notes are captured."],
+					ownedDirectories: ["tests/e2e", "docs/e2e-report.md"],
+					expectedOutputs: ["docs/e2e-report.md"],
+					acceptanceCriteria: ["End-to-end report is captured."],
 				},
 			],
 			validationRules: ["Required outputs exist.", "API routes match the generated OpenAPI contract."],
@@ -202,5 +200,28 @@ describe("LLM planner", () => {
 	it("rejects roles without owned paths", () => {
 		const text = plannerJson("polling").replace('"ownedDirectories":["src","client"]', '"ownedDirectories":[]');
 		expect(() => parsePlannerOutput(text)).toThrow("ownedDirectories");
+	});
+
+	it("rejects unknown role profiles", () => {
+		const text = plannerJson("polling").replace('"profile":"backend-engineer"', '"profile":"custom-engineer"');
+		expect(() => parsePlannerOutput(text)).toThrow("Unknown role profile");
+	});
+
+	it("rejects planner-defined role runtime configuration", () => {
+		const text = plannerJson("polling").replace(
+			'"ownedDirectories":["src","client"]',
+			'"allowedTools":["bash"],"ownedDirectories":["src","client"]',
+		);
+		expect(() => parsePlannerOutput(text)).toThrow("must not define allowedTools");
+	});
+
+	it("requires exactly one e2e verifier task", () => {
+		const text = plannerJson("polling").replace('"profile":"e2e-verifier"', '"profile":"docs-engineer"');
+		expect(() => parsePlannerOutput(text)).toThrow("exactly one e2e-verifier task");
+	});
+
+	it("requires the e2e verifier task to depend on implementation and test tasks", () => {
+		const text = plannerJson("polling").replace('"dependencies":["build-app"]', '"dependencies":[]');
+		expect(() => parsePlannerOutput(text)).toThrow("must depend on");
 	});
 });

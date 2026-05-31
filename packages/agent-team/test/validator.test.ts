@@ -18,10 +18,9 @@ function plannerResult(): PlannerResult {
 			roles: [
 				{
 					name: "api-builder",
+					profile: "backend-engineer",
 					description: "Builds the API",
-					allowedTools: ["read", "write", "edit", "bash", "grep", "find", "ls"],
 					ownedDirectories: ["src"],
-					maxTurns: 30,
 				},
 			],
 			tasks: [

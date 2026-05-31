@@ -8,6 +8,12 @@ export { createBashSafetyGuard, explainUnsafeBash } from "./agent/bash-safety.js
 export { createOwnershipGuard, isPathOwned } from "./agent/file-ownership.js";
 export { runTeamAgent, type TeamAgentConfig } from "./agent/team-agent.js";
 export { buildToolPool } from "./agent/tool-pool.js";
+export {
+	formatRoleProfilesForPlanner,
+	getRoleProfile,
+	isRoleProfileId,
+	ROLE_PROFILE_IDS,
+} from "./roles/role-profiles.js";
 export { createRoleRegistry } from "./roles/role-registry.js";
 export { buildRoleSystemPrompt, getSystemPrompt } from "./roles/system-prompts.js";
 export { TaskGraph } from "./task/task-graph.js";
@@ -36,6 +42,7 @@ export type {
 	PlannerRunner,
 	RepairTask,
 	RoleDefinition,
+	RoleProfileId,
 	RoleSpec,
 	Task,
 	TaskResult,

@@ -1,10 +1,17 @@
 import type { RoleSpec } from "../types.js";
+import { getRoleProfile } from "./role-profiles.js";
 
 export function buildRoleSystemPrompt(role: RoleSpec): string {
-	return `You are ${role.name}, a specialist in a dynamic AI engineering team.
+	const profile = getRoleProfile(role.profile);
+	if (!profile) throw new Error(`Unknown role profile: ${role.profile}`);
+
+	return `You are ${role.name}, the ${profile.systemPromptTitle} in a dynamic AI engineering team.
 
 Role:
 ${role.description}
+
+Profile:
+${profile.description}
 
 Collaboration contract:
 - Read docs/contracts/team-plan.json and docs/contracts/project-manifest.json before changing files.
@@ -14,15 +21,20 @@ Collaboration contract:
 - Treat acceptance criteria in the task prompt as mandatory.
 - Prefer small, coherent files over unrelated broad rewrites.
 - Do not run long-lived services or dependency installation commands unless explicitly approved.
-- Report what you changed, which contract entries you satisfied, and anything left unresolved.`;
+- Report what you changed, which contract entries you satisfied, and anything left unresolved.
+
+Profile-specific instructions:
+${profile.instructions.map((instruction) => `- ${instruction}`).join("\n")}
+
+Skill hints:
+${profile.skillHints.map((hint) => `- ${hint}`).join("\n")}`;
 }
 
 export function getSystemPrompt(roleName: string): string {
 	return buildRoleSystemPrompt({
 		name: roleName,
+		profile: "backend-engineer",
 		description: "Completes assigned project tasks from the dynamic team plan.",
-		allowedTools: ["read", "write", "edit", "bash", "grep", "find", "ls"],
 		ownedDirectories: ["src", "client", "docs", "README.md", "package.json"],
-		maxTurns: 30,
 	});
 }

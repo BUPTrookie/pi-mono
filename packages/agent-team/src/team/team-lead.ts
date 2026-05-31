@@ -290,7 +290,7 @@ export class TeamLead {
 					streamFn: streamSimple,
 					getApiKey: this.getApiKey,
 					parentSignal: this.abortController.signal,
-					thinkingLevel: this.config.thinkingLevel,
+					thinkingLevel: role.thinkingLevelOverride ?? this.config.thinkingLevel,
 					interventionMode: this.config.interventionMode ?? "none",
 					taskId: task.id,
 					onTaskProgress: (message) =>

@@ -1,6 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { completeSimple } from "@mariozechner/pi-ai";
+import { formatRoleProfilesForPlanner, getRoleProfile, isRoleProfileId } from "../roles/role-profiles.js";
 import { buildRoleSystemPrompt } from "../roles/system-prompts.js";
 import type {
 	ContractSpec,
@@ -26,13 +27,17 @@ interface RawPlannerJson {
 }
 
 function roleFromSpec(spec: RoleSpec): RoleDefinition {
+	const profile = getRoleProfile(spec.profile);
 	return {
 		name: spec.name,
+		profile: spec.profile,
 		description: spec.description,
-		systemPrompt: spec.systemPrompt ?? buildRoleSystemPrompt(spec),
-		allowedTools: spec.allowedTools,
+		systemPrompt: buildRoleSystemPrompt(spec),
+		allowedTools: profile.allowedTools,
 		ownedDirectories: spec.ownedDirectories,
-		maxTurns: spec.maxTurns,
+		skillHints: profile.skillHints,
+		thinkingLevelOverride: profile.thinkingLevelOverride,
+		maxTurns: profile.maxTurns,
 	};
 }
 
@@ -100,15 +105,16 @@ function asOptionalStringArray(value: unknown, label: string): string[] {
 function normalizeRole(value: unknown, index: number): RoleSpec {
 	const role = asRecord(value, `teamPlan.roles[${index}]`);
 	const ownedDirectories = asStringArray(role.ownedDirectories, `teamPlan.roles[${index}].ownedDirectories`);
-	const allowedTools = asStringArray(role.allowedTools, `teamPlan.roles[${index}].allowedTools`);
+	for (const field of ["allowedTools", "systemPrompt", "maxTurns", "modelOverride", "thinkingLevelOverride"]) {
+		if (field in role) throw new Error(`teamPlan.roles[${index}] must not define ${field}; use role profiles.`);
+	}
+	const profile = asString(role.profile, `teamPlan.roles[${index}].profile`);
+	if (!isRoleProfileId(profile)) throw new Error(`Unknown role profile: ${profile}`);
 	return {
 		name: asString(role.name, `teamPlan.roles[${index}].name`),
+		profile,
 		description: asString(role.description, `teamPlan.roles[${index}].description`),
-		allowedTools,
 		ownedDirectories,
-		maxTurns: typeof role.maxTurns === "number" && role.maxTurns > 0 ? Math.floor(role.maxTurns) : 35,
-		systemPrompt:
-			typeof role.systemPrompt === "string" && role.systemPrompt.trim() ? role.systemPrompt.trim() : undefined,
 	};
 }
 
@@ -162,6 +168,26 @@ function validateAcyclicTasks(tasks: TaskSpec[]): void {
 	}
 }
 
+function validateE2eVerifierTask(roles: RoleSpec[], tasks: TaskSpec[]): void {
+	const rolesByName = new Map(roles.map((role) => [role.name, role]));
+	const e2eTasks = tasks.filter((task) => rolesByName.get(task.role)?.profile === "e2e-verifier");
+	if (e2eTasks.length !== 1) {
+		throw new Error("teamPlan.tasks must contain exactly one e2e-verifier task.");
+	}
+
+	const e2eTask = e2eTasks[0];
+	const dependencies = new Set(e2eTask.dependencies);
+	const requiredDependencies = tasks.filter((task) => {
+		if (task.id === e2eTask.id) return false;
+		return rolesByName.get(task.role)?.profile !== "docs-engineer";
+	});
+	for (const dependency of requiredDependencies) {
+		if (!dependencies.has(dependency.id)) {
+			throw new Error(`e2e-verifier task ${e2eTask.id} must depend on ${dependency.id}.`);
+		}
+	}
+}
+
 function buildContracts(raw: RawPlannerJson): GeneratedContracts {
 	const projectManifest = asRecord(raw.projectManifest, "projectManifest");
 	const contracts: GeneratedContracts = { projectManifest };
@@ -201,6 +227,7 @@ function validatePlannerJson(raw: RawPlannerJson): PlannerResult {
 		}
 	}
 	validateAcyclicTasks(tasks);
+	validateE2eVerifierTask(roles, tasks);
 
 	const contracts = buildContracts(raw);
 	const plan: TeamPlan = {
@@ -272,11 +299,9 @@ Required top-level shape:
     "roles": [
       {
         "name": "role-id",
+        "profile": "backend-engineer",
         "description": "role purpose",
-        "allowedTools": ["read", "write", "edit", "bash", "grep", "find", "ls"],
-        "ownedDirectories": ["src"],
-        "maxTurns": 40,
-        "systemPrompt": "optional role-specific system prompt"
+        "ownedDirectories": ["src"]
       }
     ],
     "tasks": [
@@ -306,6 +331,12 @@ Required top-level shape:
 
 Rules:
 - You decide roles, tasks, dependencies, contracts, and validation rules from the actual requirement.
+- Select roles only from these available role profiles:
+${formatRoleProfilesForPlanner()}
+- Do not invent tools, system prompts, max turns, model overrides, or thinking overrides. Role profile runtime config is fixed by the system.
+- Create exactly one final e2e-verifier task for every generated project.
+- The e2e-verifier task must depend on every implementation and test task, but not on optional docs-only tasks.
+- Unit and module tests belong to implementation agents or test-engineer tasks. The e2e-verifier checks complete user workflows and writes docs/e2e-report.md.
 - Prefer pure-JavaScript packages that install without native compilation. Never use packages that require node-gyp, prebuilds, or C++ build tools. For SQLite use sql.js instead of better-sqlite3. For bcrypt use bcryptjs. For sharp use canvas or a WASM alternative. If no pure-JS alternative exists, use the simplest API surface that avoids native addons.
 - Include openapi only if the project needs an HTTP API.
 - Include dataModel only if the project needs persistent or structured domain data.

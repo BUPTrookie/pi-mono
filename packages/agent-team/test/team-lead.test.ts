@@ -42,10 +42,15 @@ function plannerResult(): PlannerResult {
 			roles: [
 				{
 					name: "project-builder",
+					profile: "project-setup",
 					description: "Builds the CLI project",
-					allowedTools: ["read", "write", "edit", "bash", "grep", "find", "ls"],
 					ownedDirectories: ["src", "."],
-					maxTurns: 30,
+				},
+				{
+					name: "project-verifier",
+					profile: "e2e-verifier",
+					description: "Verifies the CLI project end to end",
+					ownedDirectories: ["tests/e2e", "docs/e2e-report.md"],
 				},
 			],
 			tasks: [
@@ -58,6 +63,16 @@ function plannerResult(): PlannerResult {
 					ownedDirectories: ["src", "."],
 					expectedOutputs: ["src/index.js", "package.json", "README.md"],
 					acceptanceCriteria: ["CLI source and package scripts exist."],
+				},
+				{
+					id: "verify-e2e",
+					role: "project-verifier",
+					subject: "Verify project end to end",
+					description: "Run the generated CLI through an end-to-end flow and write the report.",
+					dependencies: ["build-cli"],
+					ownedDirectories: ["tests/e2e", "docs/e2e-report.md"],
+					expectedOutputs: ["docs/e2e-report.md"],
+					acceptanceCriteria: ["End-to-end report exists."],
 				},
 			],
 			contracts: [
@@ -128,6 +143,8 @@ describe("TeamLead dynamic run", () => {
 					"utf-8",
 				);
 				writeFileSync(join(agentConfig.outputDir, "README.md"), "# Project\n", "utf-8");
+				mkdirSync(join(agentConfig.outputDir, "docs"), { recursive: true });
+				writeFileSync(join(agentConfig.outputDir, "docs/e2e-report.md"), "# E2E\n", "utf-8");
 			}
 			return { taskId: agentConfig.taskId ?? "", success: true, output: "ok", filesCreated: [], turnsUsed: 1 };
 		};
@@ -215,5 +232,50 @@ describe("TeamLead dynamic run", () => {
 		expect(failedResult?.success).toBe(false);
 		expect(failedResult?.error).toBe("worker crashed");
 		expect(failedEvent?.type).toBe("task_end");
+	});
+
+	it("uses profile runtime config and schedules e2e verification after implementation", async () => {
+		const outputDir = tempProject();
+		mkdirSync(outputDir, { recursive: true });
+		const taskIds: string[] = [];
+		const roleConfigs: Array<{
+			taskId: string | undefined;
+			tools: string[];
+			prompt: string;
+			thinking: string | undefined;
+		}> = [];
+		const runner: TeamAgentRunner = async (_description, agentConfig) => {
+			taskIds.push(agentConfig.taskId ?? "");
+			roleConfigs.push({
+				taskId: agentConfig.taskId,
+				tools: agentConfig.role.allowedTools,
+				prompt: agentConfig.role.systemPrompt,
+				thinking: agentConfig.thinkingLevel,
+			});
+			return { taskId: agentConfig.taskId ?? "", success: true, output: "ok", filesCreated: [], turnsUsed: 1 };
+		};
+		const planner: PlannerRunner = async () => plannerResult();
+
+		const lead = new TeamLead(
+			config(outputDir),
+			model,
+			() => "key",
+			() => undefined,
+			controls(),
+			runner,
+			planner,
+			async () => [],
+		);
+		const result = await lead.orchestrate();
+		const buildConfig = roleConfigs.find((item) => item.taskId === "build-cli");
+		const e2eConfig = roleConfigs.find((item) => item.taskId === "verify-e2e");
+
+		expect(result.success).toBe(true);
+		expect(taskIds).toEqual(["build-cli", "verify-e2e"]);
+		expect(buildConfig?.tools).toContain("write");
+		expect(buildConfig?.prompt).toContain("Project Setup Agent");
+		expect(e2eConfig?.prompt).toContain("End-to-End Verification Agent");
+		expect(e2eConfig?.prompt).toContain("ordinary unit tests");
+		expect(e2eConfig?.thinking).toBe("medium");
 	});
 });

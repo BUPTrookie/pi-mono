@@ -174,7 +174,7 @@ export class AgentRunner {
 		// Reload messages from context
 		const loaded = runner.sessionManager.buildSessionContext();
 		if (loaded.messages.length > 0) {
-			runner.agent.replaceMessages(loaded.messages);
+			runner.agent.state.messages = loaded.messages;
 		}
 
 		// Pre-compaction flush: save context excerpts to daily log before it gets too large
@@ -200,7 +200,7 @@ export class AgentRunner {
 			codexEnabled: !!this.codexClient?.isRunning,
 			agentTypes,
 		});
-		runner.session.agent.setSystemPrompt(systemPrompt);
+		runner.session.agent.state.systemPrompt = systemPrompt;
 
 		// Build user message with timestamp and sender prefix
 		const now = new Date();
@@ -258,7 +258,7 @@ export class AgentRunner {
 		const pendingTools = new Map<string, { toolName: string; startTime: number }>();
 
 		const unsubscribe = runner.session.subscribe((event) => {
-			if (event.type === "auto_compaction_start") {
+			if (event.type === "compaction_start") {
 				if (statusMessageId) {
 					channel.updateMessage(message.chatId, statusMessageId, "... compacting context").catch(() => {});
 				}
@@ -402,7 +402,7 @@ export class AgentRunner {
 		if (this.config.model.apiKey) {
 			authStorage.setRuntimeApiKey(this.config.model.provider, this.config.model.apiKey);
 		}
-		const modelRegistry = new ModelRegistry(authStorage);
+		const modelRegistry = ModelRegistry.create(authStorage);
 
 		const getApiKey = async (provider: string) => {
 			// Config apiKey takes priority
@@ -483,12 +483,12 @@ export class AgentRunner {
 
 		// 6. Add agent tool to the tools array and update the agent
 		tools.push(agentTool);
-		agent.setTools(tools);
+		agent.state.tools = tools;
 
 		// Load existing messages
 		const loaded = sessionManager.buildSessionContext();
 		if (loaded.messages.length > 0) {
-			agent.replaceMessages(loaded.messages);
+			agent.state.messages = loaded.messages;
 		}
 
 		// Stub resource loader (same pattern as mom)
@@ -500,7 +500,6 @@ export class AgentRunner {
 			getAgentsFiles: () => ({ agentsFiles: [] }),
 			getSystemPrompt: () => systemPrompt,
 			getAppendSystemPrompt: () => [],
-			getPathMetadata: () => new Map(),
 			extendResources: () => {},
 			reload: async () => {},
 		};

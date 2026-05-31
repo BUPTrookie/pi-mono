@@ -5,14 +5,25 @@ import type { Api, Model } from "@mariozechner/pi-ai";
 
 export type AgentRoleName = string;
 
+export type RoleProfileId =
+	| "project-setup"
+	| "backend-engineer"
+	| "data-engineer"
+	| "frontend-engineer"
+	| "test-engineer"
+	| "e2e-verifier"
+	| "docs-engineer";
+
 export type InterventionMode = "none" | "approval" | "interactive";
 
 export interface RoleDefinition {
 	name: AgentRoleName;
+	profile: RoleProfileId;
 	description: string;
 	systemPrompt: string;
 	allowedTools: string[];
 	ownedDirectories: string[];
+	skillHints: string[];
 	modelOverride?: { provider: string; model: string };
 	thinkingLevelOverride?: ThinkingLevel;
 	maxTurns: number;
@@ -31,11 +42,9 @@ export interface ContractSpec {
 
 export interface RoleSpec {
 	name: AgentRoleName;
+	profile: RoleProfileId;
 	description: string;
-	allowedTools: string[];
 	ownedDirectories: string[];
-	maxTurns: number;
-	systemPrompt?: string;
 }
 
 export interface TaskSpec {
