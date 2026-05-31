@@ -61,6 +61,66 @@ function existsOutput(outputDir: string, relativePath: string): boolean {
 	return existsSync(join(outputDir, relativePath));
 }
 
+/**
+ * Glob-style existence check. Supports `*` wildcard in path segments.
+ * Returns list of matched relative paths (empty if none).
+ */
+function globOutput(outputDir: string, pattern: string): string[] {
+	if (!pattern.includes("*") && !pattern.includes("?")) return [];
+	const segments = pattern.split("/");
+	const results: string[] = [];
+	const visit = (dir: string, segIndex: number, built: string[]): void => {
+		if (segIndex >= segments.length) {
+			const fullPath = join(outputDir, ...built);
+			if (existsSync(fullPath)) results.push(built.join("/"));
+			return;
+		}
+		const seg = segments[segIndex];
+		const isLast = segIndex === segments.length - 1;
+		if (!seg.includes("*") && !seg.includes("?")) {
+			visit(join(dir, seg), segIndex + 1, [...built, seg]);
+			return;
+		}
+		// Convert glob segment to regex
+		const re = new RegExp(`^${seg.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "[^/]*").replace(/\?/g, "[^/]")}$`);
+		const currentDir = built.length === 0 ? outputDir : join(outputDir, ...built);
+		if (!existsSync(currentDir)) return;
+		for (const entry of readdirSync(currentDir, { withFileTypes: true })) {
+			if (re.test(entry.name)) {
+				const isFile = entry.isFile();
+				const isDir = entry.isDirectory();
+				if (isLast ? isFile || isDir : isDir) {
+					visit(join(currentDir, entry.name), segIndex + 1, [...built, entry.name]);
+				}
+			}
+		}
+	};
+	visit(outputDir, 0, []);
+	return results;
+}
+
+/**
+ * Fuzzy match: when an exact path doesn't exist, check whether a file with
+ * the same basename (different extension) or a similar name exists anywhere
+ * under the output directory. Returns the best match path or undefined.
+ */
+function fuzzyMatchOutput(outputDir: string, relativePath: string): string | undefined {
+	const basename = relativePath.split("/").pop() ?? "";
+	const nameWithoutExt = basename.replace(/\.[^.]+$/, "");
+	if (!nameWithoutExt || nameWithoutExt === basename) return undefined;
+
+	const allFiles = collectFiles(outputDir, 500);
+	for (const file of allFiles) {
+		const rel = relative(outputDir, file).split(/[\\/]/).join("/");
+		const fileBasename = rel.split("/").pop() ?? "";
+		const fileWithoutExt = fileBasename.replace(/\.[^.]+$/, "");
+		if (fileWithoutExt === nameWithoutExt && fileBasename !== basename) {
+			return rel;
+		}
+	}
+	return undefined;
+}
+
 function readJson(path: string): Record<string, unknown> | undefined {
 	try {
 		return JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
@@ -411,15 +471,30 @@ export function validateTeamOutput(outputDir: string, plan: TeamPlan): Validatio
 
 	for (const task of plan.tasks) {
 		for (const expected of task.expectedOutputs) {
-			if (!existsOutput(outputDir, expected)) {
+			// 1. Exact match
+			if (existsOutput(outputDir, expected)) continue;
+			// 2. Glob match (e.g. vitest.config.*)
+			if (globOutput(outputDir, expected).length > 0) continue;
+			// 3. Fuzzy match - same basename, different extension/path
+			const fuzzy = fuzzyMatchOutput(outputDir, expected);
+			if (fuzzy) {
 				issues.push(
 					issue(
-						`missing-output-${task.id}-${expected.replace(/[^a-z0-9]+/gi, "-")}`,
-						`Task ${task.id} did not produce expected output: ${expected}`,
-						{ severity: "error", ownerRole: task.role, ownerTaskId: task.id, file: expected },
+						`fuzzy-output-${task.id}-${expected.replace(/[^a-z0-9]+/gi, "-")}`,
+						`Task ${task.id} expected "${expected}" but found similar: "${fuzzy}"`,
+						{ severity: "warning", ownerRole: task.role, ownerTaskId: task.id, file: fuzzy },
 					),
 				);
+				continue;
 			}
+			// 4. No match - report as error
+			issues.push(
+				issue(
+					`missing-output-${task.id}-${expected.replace(/[^a-z0-9]+/gi, "-")}`,
+					`Task ${task.id} did not produce expected output: ${expected}`,
+					{ severity: "error", ownerRole: task.role, ownerTaskId: task.id, file: expected },
+				),
+			);
 		}
 	}
 

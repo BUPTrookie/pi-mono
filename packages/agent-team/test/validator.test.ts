@@ -149,4 +149,73 @@ describe("validator", () => {
 		expect(openApiIssue?.ownerTaskId).toBe("build-project");
 		expect(openApiIssue?.ownerRole).toBe("project-builder");
 	});
+
+		it("matches glob patterns in expectedOutputs", () => {
+			const outputDir = tempProject();
+			mkdirSync(join(outputDir, "src"), { recursive: true });
+			const result = plannerResult();
+			result.plan.tasks[0].expectedOutputs = ["vitest.config.*", "package.json"];
+			writeContracts(outputDir, result);
+			writeFileSync(join(outputDir, "vitest.config.ts"), "export default {}", "utf-8");
+			writeFileSync(
+				join(outputDir, "package.json"),
+				JSON.stringify({ scripts: { start: "node src/index.js" } }),
+				"utf-8",
+			);
+
+			const issues = validateTeamOutput(outputDir, result.plan);
+			const missingVitest = issues.find((i) => i.id.includes("vitest"));
+			expect(missingVitest).toBeUndefined();
+		});
+
+		it("reports warning on fuzzy basename match with different extension", () => {
+			const outputDir = tempProject();
+			mkdirSync(join(outputDir, "src"), { recursive: true });
+			const result = plannerResult();
+			result.plan.tasks[0].expectedOutputs = ["vitest.config.js", "package.json"];
+			writeContracts(outputDir, result);
+			writeFileSync(join(outputDir, "vitest.config.ts"), "export default {}", "utf-8");
+			writeFileSync(
+				join(outputDir, "package.json"),
+				JSON.stringify({ scripts: { start: "node src/index.js" } }),
+				"utf-8",
+			);
+
+			const issues = validateTeamOutput(outputDir, result.plan);
+			const fuzzy = issues.find((i) => i.id.startsWith("fuzzy-output"));
+			expect(fuzzy).toBeDefined();
+			expect(fuzzy?.severity).toBe("warning");
+			expect(fuzzy?.message).toContain("vitest.config.js");
+			expect(fuzzy?.message).toContain("vitest.config.ts");
+		});
+
+		it("still reports error when no similar file exists", () => {
+			const outputDir = tempProject();
+			mkdirSync(outputDir, { recursive: true });
+			const result = plannerResult();
+			result.plan.tasks[0].expectedOutputs = ["src/index.js"];
+			writeContracts(outputDir, result);
+
+			const issues = validateTeamOutput(outputDir, result.plan);
+			const missing = issues.find((i) => i.id.startsWith("missing-output"));
+			expect(missing).toBeDefined();
+			expect(missing?.severity).toBe("error");
+		});
+
+		it("prefers exact match over glob and fuzzy", () => {
+			const outputDir = tempProject();
+			mkdirSync(join(outputDir, "src"), { recursive: true });
+			const result = plannerResult();
+			result.plan.tasks[0].expectedOutputs = ["src/index.js", "package.json"];
+			writeContracts(outputDir, result);
+			writeFileSync(join(outputDir, "src/index.js"), "console.log('hello')", "utf-8");
+			writeFileSync(
+				join(outputDir, "package.json"),
+				JSON.stringify({ scripts: { start: "node src/index.js" } }),
+				"utf-8",
+			);
+
+			const issues = validateTeamOutput(outputDir, result.plan);
+			expect(issues.some((i) => i.id.startsWith("missing-output") || i.id.startsWith("fuzzy-output"))).toBe(false);
+		});
 });
