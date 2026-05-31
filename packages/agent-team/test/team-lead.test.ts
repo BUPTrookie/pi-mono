@@ -208,9 +208,7 @@ describe("TeamLead dynamic run", () => {
 		);
 		const result = await lead.orchestrate();
 		const failedResult = result.tasks.find((task) => task.taskId === "fail-task");
-		const failedEvent = events.find(
-			(event) => event.type === "task_end" && event.task.id === "fail-task",
-		);
+		const failedEvent = events.find((event) => event.type === "task_end" && event.task.id === "fail-task");
 
 		expect(result.success).toBe(false);
 		expect(result.error).toContain("fail-task");

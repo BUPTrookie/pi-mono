@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
 import type { BeforeToolCallContext } from "@mariozechner/pi-agent-core";
+import { describe, expect, it } from "vitest";
 import { createOwnershipGuard, isPathOwned } from "../src/agent/file-ownership.js";
 
 function toolContext(name: string, args: Record<string, unknown>): BeforeToolCallContext {
