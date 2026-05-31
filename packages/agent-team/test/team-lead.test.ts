@@ -76,6 +76,33 @@ function plannerResult(): PlannerResult {
 	};
 }
 
+function parallelPlannerResult(): PlannerResult {
+	const result = plannerResult();
+	result.plan.tasks = [
+		{
+			id: "ok-task",
+			role: "project-builder",
+			subject: "Successful task",
+			description: "Complete normally.",
+			dependencies: [],
+			ownedDirectories: ["src", "."],
+			expectedOutputs: ["src/ok.js"],
+			acceptanceCriteria: ["Task succeeds."],
+		},
+		{
+			id: "fail-task",
+			role: "project-builder",
+			subject: "Failing task",
+			description: "This task fails.",
+			dependencies: [],
+			ownedDirectories: ["src", "."],
+			expectedOutputs: ["src/fail.js"],
+			acceptanceCriteria: ["Task failure is reported."],
+		},
+	];
+	return result;
+}
+
 function controls(): TeamLeadControls {
 	return {
 		waitIfPaused: async () => undefined,
@@ -155,5 +182,40 @@ describe("TeamLead dynamic run", () => {
 		expect(result.error).toContain("Planning failed: invalid planner output");
 		expect(runnerCalls).toBe(0);
 		expect(events.map((event) => event.type)).toEqual(["run_start", "run_end"]);
+	});
+
+	it("fails the run and reports the actual task when a parallel worker rejects", async () => {
+		const outputDir = tempProject();
+		mkdirSync(outputDir, { recursive: true });
+		const events: TeamEvent[] = [];
+		const runner: TeamAgentRunner = async (_description, agentConfig) => {
+			if (agentConfig.taskId === "fail-task") {
+				throw new Error("worker crashed");
+			}
+			return { taskId: agentConfig.taskId ?? "", success: true, output: "ok", filesCreated: [], turnsUsed: 1 };
+		};
+		const planner: PlannerRunner = async () => parallelPlannerResult();
+
+		const lead = new TeamLead(
+			{ ...config(outputDir), maxRepairRounds: 0 },
+			model,
+			() => "key",
+			(event) => events.push(event),
+			controls(),
+			runner,
+			planner,
+			async () => [],
+		);
+		const result = await lead.orchestrate();
+		const failedResult = result.tasks.find((task) => task.taskId === "fail-task");
+		const failedEvent = events.find(
+			(event) => event.type === "task_end" && event.task.id === "fail-task",
+		);
+
+		expect(result.success).toBe(false);
+		expect(result.error).toContain("fail-task");
+		expect(failedResult?.success).toBe(false);
+		expect(failedResult?.error).toBe("worker crashed");
+		expect(failedEvent?.type).toBe("task_end");
 	});
 });

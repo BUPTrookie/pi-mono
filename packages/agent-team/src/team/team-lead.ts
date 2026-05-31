@@ -99,6 +99,17 @@ function hasBlockingIssues(issues: ValidationIssue[]): boolean {
 	return issues.some((issue) => issue.severity === "error");
 }
 
+function issuesFromTaskFailures(results: TaskResult[]): ValidationIssue[] {
+	return results
+		.filter((result) => !result.success)
+		.map((result) => ({
+			id: `task-failed-${result.taskId}`,
+			severity: "error" as const,
+			message: `Task ${result.taskId} failed: ${result.error ?? "Unknown agent failure"}`,
+			ownerTaskId: result.taskId,
+		}));
+}
+
 export class TeamLead {
 	private abortController = new AbortController();
 	private validationIssues: ValidationIssue[] = [];
@@ -169,7 +180,10 @@ export class TeamLead {
 			totalTurns += runResult.turns;
 
 			this.emit({ type: "validation_start", round, timestamp: now() });
-			const issues = await this.validatorRunner(outputDir, plan, signal);
+			const issues = [
+				...issuesFromTaskFailures(runResult.results),
+				...(await this.validatorRunner(outputDir, plan, signal)),
+			];
 			this.validationIssues = issues;
 			this.emit({ type: "validation_end", round, issues, timestamp: now() });
 
@@ -298,26 +312,40 @@ export class TeamLead {
 			});
 
 			const settledResults = await Promise.allSettled(batchPromises);
-			for (const settled of settledResults) {
+			for (let index = 0; index < settledResults.length; index++) {
+				const settled = settledResults[index];
+				const task = batch[index];
 				scheduler.finishTask();
 				if (settled.status === "rejected") {
-					const inProgress = graph.getAllTasks().find((task) => task.status === "in_progress");
-					if (inProgress) {
-						const error = settled.reason instanceof Error ? settled.reason.message : String(settled.reason);
-						graph.propagateFailure(inProgress.id, error);
-					}
+					const error = settled.reason instanceof Error ? settled.reason.message : String(settled.reason);
+					const result: TaskResult = {
+						taskId: task.id,
+						success: false,
+						output: "",
+						filesCreated: [],
+						error,
+						turnsUsed: 0,
+					};
+					graph.propagateFailure(task.id, error);
+					results.push(result);
+					this.emit({ type: "task_end", task: graph.getTask(task.id) ?? task, result, timestamp: now() });
 					continue;
 				}
 
-				const { task, result } = settled.value;
+				const { task: completedTask, result } = settled.value;
 				turns += result.turnsUsed;
 				if (result.success) {
-					graph.markComplete(task.id, result);
+					graph.markComplete(completedTask.id, result);
 				} else {
-					graph.propagateFailure(task.id, result.error ?? "Unknown agent failure");
+					graph.propagateFailure(completedTask.id, result.error ?? "Unknown agent failure");
 				}
 				results.push(result);
-				this.emit({ type: "task_end", task: graph.getTask(task.id) ?? task, result, timestamp: now() });
+				this.emit({
+					type: "task_end",
+					task: graph.getTask(completedTask.id) ?? completedTask,
+					result,
+					timestamp: now(),
+				});
 			}
 		}
 

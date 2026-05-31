@@ -176,7 +176,9 @@ export async function runTeamAgent(taskDescription: string, config: TeamAgentCon
 			turnsUsed,
 		};
 	} catch (err) {
-		const isAborted = turnsUsed >= maxTurns || parentSignal?.aborted;
+		const parentAborted = parentSignal?.aborted ?? false;
+		const reachedMaxTurns = turnsUsed >= maxTurns;
+		const isAborted = parentAborted || reachedMaxTurns;
 		const text = extractFinalText(agent.state.messages);
 		const filesCreated = extractFilesCreated(agent.state.messages);
 		return {
@@ -185,9 +187,9 @@ export async function runTeamAgent(taskDescription: string, config: TeamAgentCon
 			output: text,
 			filesCreated,
 			error: isAborted
-				? turnsUsed >= maxTurns
-					? `Agent reached maximum turns (${maxTurns})`
-					: "Parent aborted"
+				? parentAborted
+					? "Parent aborted"
+					: `Agent reached maximum turns (${maxTurns})`
 				: err instanceof Error
 					? err.message
 					: String(err),

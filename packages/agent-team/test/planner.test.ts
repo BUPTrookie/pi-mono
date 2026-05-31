@@ -191,6 +191,14 @@ describe("LLM planner", () => {
 		expect(() => parsePlannerOutput(text)).toThrow("unknown dependency");
 	});
 
+	it("rejects cyclic task dependencies", () => {
+		const text = plannerJson("polling")
+			.replace('"dependencies":[]', '"dependencies":["validate-app"]')
+			.replace('"dependencies":["build-app"]', '"dependencies":["build-app"]');
+
+		expect(() => parsePlannerOutput(text)).toThrow("cyclic dependency");
+	});
+
 	it("rejects roles without owned paths", () => {
 		const text = plannerJson("polling").replace('"ownedDirectories":["src","client"]', '"ownedDirectories":[]');
 		expect(() => parsePlannerOutput(text)).toThrow("ownedDirectories");

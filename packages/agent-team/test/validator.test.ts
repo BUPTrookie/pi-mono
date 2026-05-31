@@ -128,4 +128,26 @@ describe("validator", () => {
 		expect(issues[0]?.id).toContain("runtime-check-node-check");
 		expect(issues[0]?.ownerTaskId).toBe("task-api");
 	});
+
+	it("routes package and OpenAPI validation issues to dynamic task owners", () => {
+		const outputDir = tempProject();
+		mkdirSync(join(outputDir, "src"), { recursive: true });
+		const result = plannerResult();
+		result.plan.roles[0].name = "project-builder";
+		result.plan.tasks[0].id = "build-project";
+		result.plan.tasks[0].role = "project-builder";
+		result.plan.tasks[0].expectedOutputs = ["src/index.js", "package.json"];
+		writeContracts(outputDir, result);
+		writeFileSync(join(outputDir, "package.json"), JSON.stringify({ name: "dynamic-app" }), "utf-8");
+		writeFileSync(join(outputDir, "src/index.js"), "console.log('/api/health')", "utf-8");
+
+		const issues = validateTeamOutput(outputDir, result.plan);
+		const packageIssue = issues.find((issue) => issue.id === "missing-package-scripts");
+		const openApiIssue = issues.find((issue) => issue.id.startsWith("missing-openapi-path"));
+
+		expect(packageIssue?.ownerTaskId).toBe("build-project");
+		expect(packageIssue?.ownerRole).toBe("project-builder");
+		expect(openApiIssue?.ownerTaskId).toBe("build-project");
+		expect(openApiIssue?.ownerRole).toBe("project-builder");
+	});
 });

@@ -134,6 +134,34 @@ function validateSafePaths(paths: string[], label: string): void {
 	}
 }
 
+function validateAcyclicTasks(tasks: TaskSpec[]): void {
+	const byId = new Map(tasks.map((task) => [task.id, task]));
+	const visiting = new Set<string>();
+	const visited = new Set<string>();
+
+	const visit = (taskId: string, path: string[]): void => {
+		if (visited.has(taskId)) return;
+		if (visiting.has(taskId)) {
+			const cycleStart = path.indexOf(taskId);
+			const cycle = path.slice(cycleStart).join(" -> ");
+			throw new Error(`Task plan contains cyclic dependency: ${cycle}`);
+		}
+
+		const task = byId.get(taskId);
+		if (!task) return;
+		visiting.add(taskId);
+		for (const dependency of task.dependencies) {
+			visit(dependency, [...path, dependency]);
+		}
+		visiting.delete(taskId);
+		visited.add(taskId);
+	};
+
+	for (const task of tasks) {
+		visit(task.id, [task.id]);
+	}
+}
+
 function buildContracts(raw: RawPlannerJson): GeneratedContracts {
 	const projectManifest = asRecord(raw.projectManifest, "projectManifest");
 	const contracts: GeneratedContracts = { projectManifest };
@@ -172,6 +200,7 @@ function validatePlannerJson(raw: RawPlannerJson): PlannerResult {
 			if (dependency === task.id) throw new Error(`Task ${task.id} cannot depend on itself.`);
 		}
 	}
+	validateAcyclicTasks(tasks);
 
 	const contracts = buildContracts(raw);
 	const plan: TeamPlan = {

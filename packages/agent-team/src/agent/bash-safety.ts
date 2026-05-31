@@ -14,9 +14,12 @@ export interface BashSafetyOptions {
 }
 
 const DANGEROUS_PATTERNS = [
-	/\brm\s+.*(?:-[a-z]*[rf][a-z]*|\/s|\/q)/i,
+	/\brm\s+/i,
 	/\b(?:del|erase|rmdir)\s+.*(?:\/s|\/q|-[a-z]*[rf][a-z]*)/i,
 	/\b(?:npm|pnpm|yarn|bun)\s+(?:install|add|remove|start|run\s+(?:dev|start))\b/i,
+	/\bnpx\s+/i,
+	/\bchmod\s+/i,
+	/\b(?:curl|wget)\b[\s\S]*\|\s*(?:bash|sh)\b/i,
 	/\bdocker\s+(?:build|up)\b/i,
 	/\bdocker\s+compose\s+(?:build|up)\b/i,
 	/\bdocker-compose\s+(?:build|up)\b/i,

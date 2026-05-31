@@ -5,6 +5,7 @@ import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
 import type { InterventionMode, TeamConfig } from "./types.js";
 
 export interface AgentTeamConfigFile {
+	outputDir?: string;
 	model?: {
 		provider?: string;
 		model?: string;

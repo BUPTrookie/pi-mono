@@ -227,12 +227,19 @@ function scriptExists(packageJson: PackageJson, name: string): boolean {
 
 function ownerForFile(plan: TeamPlan, file: string): Pick<ValidationIssue, "ownerRole" | "ownerTaskId"> {
 	const normalized = file.split(/[\\/]/).join("/");
-	const ownerTask = plan.tasks.find((task) =>
-		task.ownedDirectories.some((owned) => {
+	let ownerTask: TeamPlan["tasks"][number] | undefined;
+	let bestLength = -1;
+	for (const task of plan.tasks) {
+		for (const owned of task.ownedDirectories) {
 			const ownedPath = owned.split(/[\\/]/).join("/");
-			return normalized === ownedPath || normalized.startsWith(`${ownedPath}/`);
-		}),
-	);
+			const pathLength = ownedPath === "." ? 0 : ownedPath.length;
+			const matches = ownedPath === "." || normalized === ownedPath || normalized.startsWith(`${ownedPath}/`);
+			if (matches && pathLength > bestLength) {
+				ownerTask = task;
+				bestLength = pathLength;
+			}
+		}
+	}
 	return { ownerRole: ownerTask?.role, ownerTaskId: ownerTask?.id };
 }
 
@@ -252,6 +259,16 @@ function ownerForWholeProjectCheck(plan: TeamPlan): Pick<ValidationIssue, "owner
 		plan.tasks.find((task) => task.expectedOutputs.some((output) => output.startsWith("tests"))) ??
 		plan.tasks[0];
 	return { ownerRole: qaTask?.role, ownerTaskId: qaTask?.id };
+}
+
+function ownerForApiImplementation(plan: TeamPlan): Pick<ValidationIssue, "ownerRole" | "ownerTaskId"> {
+	const apiTask =
+		plan.tasks.find((task) => /api|backend|server|route|endpoint/i.test(`${task.id} ${task.role} ${task.subject}`)) ??
+		plan.tasks.find((task) =>
+			task.expectedOutputs.some((output) => /^(src|server|api|app|package\.json)(\/|$)/i.test(output)),
+		) ??
+		plan.tasks[0];
+	return { ownerRole: apiTask?.role, ownerTaskId: apiTask?.id };
 }
 
 function commandLabel(spec: CommandSpec): string {
@@ -391,9 +408,8 @@ export function validateTeamOutput(outputDir: string, plan: TeamPlan): Validatio
 			issues.push(
 				issue("missing-package-scripts", "Root package.json must expose at least one useful script.", {
 					severity: "error",
-					ownerTaskId: "task-api",
-					ownerRole: "api-builder",
 					file: "package.json",
+					...ownerForPackage(plan),
 				}),
 			);
 		}
@@ -410,8 +426,7 @@ export function validateTeamOutput(outputDir: string, plan: TeamPlan): Validatio
 					`OpenAPI path is not represented in implementation: ${apiPath}`,
 					{
 						severity: "error",
-						ownerTaskId: "task-api",
-						ownerRole: "api-builder",
+						...ownerForApiImplementation(plan),
 					},
 				),
 			);

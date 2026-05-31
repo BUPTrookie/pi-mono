@@ -39,6 +39,7 @@ interface ParsedArgs {
 
 function parseArgs(args: string[]): ParsedArgs {
 	const result: ParsedArgs = {};
+	let positionalCount = 0;
 
 	for (let i = 0; i < args.length; i++) {
 		const arg = args[i];
@@ -80,6 +81,9 @@ function parseArgs(args: string[]): ParsedArgs {
 			result.interactive = true;
 			if (!result.options) result.options = {};
 			result.options.interventionMode = "interactive";
+		} else if (!arg.startsWith("-") && positionalCount === 0) {
+			result.requirement = arg;
+			positionalCount++;
 		}
 	}
 
@@ -90,23 +94,26 @@ function printHelp(): void {
 	console.log(`agent-team - Multi-agent team for full-stack development
 
 Usage:
+  agent-team "Build a todo app"
   agent-team --requirement "Build a todo app" --output ./output
+  agent-team "Build a todo app" --max-parallel 4
 
 Configuration (in order of priority):
   1. CLI arguments (--model, --api-key, etc.)
   2. Config file: ./agent-team.json or ~/.pi/agent-team.json
-  3. CLI defaults
+  3. Built-in defaults
 
 Options:
-  --requirement <text>       Project requirement description (required)
-  --output <path>            Output directory (required)
+  [requirement]              Project requirement (positional, or use --requirement)
+  --requirement <text>       Project requirement description
+  --output <path>            Output directory (default: from config, or "./output")
   --config <path>            Path to config file (default: ./agent-team.json or ~/.pi/agent-team.json)
   --model <id>               Model ID, supports "provider/model" format (e.g. "zai/glm-5.1")
   --provider <name>          Provider name (overrides config file)
   --api-key <key>            API key (overrides config file)
   --base-url <url>           Override model base URL
-  --max-parallel <n>         Max parallel agents (default: 2)
-  --max-repair-rounds <n>    Max validation repair rounds (default: 2)
+  --max-parallel <n>         Max parallel agents (default: from config, or 2)
+  --max-repair-rounds <n>    Max validation repair rounds (default: from config, or 2)
   --thinking-level <lvl>     Thinking level: off, minimal, low, medium, high, xhigh
   --intervention-mode <mode> none, approval, interactive (default: none)
   --interactive              Run the TUI and enable approvals
@@ -123,24 +130,21 @@ async function main(): Promise<void> {
 	}
 
 	if (!parsed.requirement) {
-		console.error("Error: --requirement is required");
+		console.error("Error: requirement is required (positional or --requirement <text>)");
 		printHelp();
 		process.exit(1);
 	}
 
-	if (!parsed.outputDir) {
-		console.error("Error: --output is required");
-		printHelp();
-		process.exit(1);
-	}
-
-	// Load config file and merge with CLI args
 	const fileConfig = findConfigFile(parsed.configPath);
+
+	// outputDir: CLI > config file > "./output"
+	const outputDir = parsed.outputDir ?? fileConfig?.outputDir ?? "./output";
+
 	const merged = mergeConfig(fileConfig, parsed.model, parsed.options);
 
 	const config: TeamConfig = {
 		requirement: parsed.requirement,
-		outputDir: resolve(parsed.outputDir),
+		outputDir: resolve(outputDir),
 		model: merged.model,
 		maxParallelAgents: merged.maxParallelAgents,
 		maxRepairRounds: merged.maxRepairRounds,

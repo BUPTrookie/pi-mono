@@ -1,10 +1,12 @@
 # agent-team 项目状态
 
+> 最近更新: 2026-05-31
+
 ## 项目定位
 
 `packages/agent-team`（`@mariozechner/pi-agent-team`）是项目级多 Agent 编排器。它不实现底层单 Agent 循环，而是把用户需求交给 Lead/Planner 做全局理解，再把规划结果转成可执行任务图、共享契约、验证和返工流程。
 
-当前定位是“队长制 + 动态派工 + 契约协作”。队长的全局判断是智能来源；契约只是把队长的规划结果固化成 worker agent 都能读取、引用、校验的共享事实，避免 agent 之间依赖截断摘要或隐式猜测。
+当前定位是"队长制 + 动态派工 + 契约协作"。队长的全局判断是智能来源；契约只是把队长的规划结果固化成 worker agent 都能读取、引用、校验的共享事实，避免 agent 之间依赖截断摘要或隐式猜测。
 
 旧的固定 6 Agent 工作流已经删除，不再保留 `pm | architect | db-engineer | backend | frontend | devops` 作为闭合流程，也不保留 `fixed` 兼容模式。
 
@@ -23,7 +25,7 @@
 3. `writeContracts()` 只写入 LLM 输出的契约：`team-plan.json`、`project-manifest.json`，以及可选的 `openapi.json`、`data-model.json`、`notes.json`。
 4. `TaskGraph` / `TaskScheduler` 根据 `TeamPlan.tasks` 执行动态 DAG。
 5. 每个 worker 的任务说明都引用契约路径、owned paths、expected outputs 和 acceptance criteria。
-6. Validator 基于契约和产物做轻量静态验证。
+6. Validator 基于契约和产物做轻量静态验证 + 运行时验证。
 7. 如果存在阻塞 issue，Lead 生成 repair tasks 并路由给 owner agent，默认最多 2 轮。
 8. 全流程通过 `TeamEvent` 输出结构化事件，CLI/TUI/WebUI 复用同一事件层和控制 API。
 
@@ -32,7 +34,7 @@
 | 文件 | 职责 |
 | --- | --- |
 | `src/types.ts` | 动态角色、`TeamPlan`、`PlannerResult`、`TeamEvent`、`TeamRun`、验证和 repair 类型 |
-| `src/team/planner.ts` | LLM Planner、planner JSON 校验、契约写入、repair task 生成 |
+| `src/team/planner.ts` | LLM Planner、planner JSON 校验（含循环依赖检测）、契约写入、repair task 生成 |
 | `src/team/team-lead.ts` | 队长调度、事件、规划失败处理、验证和返工主循环 |
 | `src/team/team-runner.ts` | `createTeamRun()` / `runTeam()`、模型解析、暂停/审批/干预控制 |
 | `src/team/validator.ts` | 契约、产物、OpenAPI、package scripts 的轻量验证 |
@@ -46,24 +48,48 @@
 - PM 不再作为默认执行 agent，需求澄清和全局把握并入 Lead/Planner。
 - Planner 不再使用关键词、领域模板或 fallback OpenAPI 生成业务契约。
 - 规划失败策略改为显式失败：第一次 LLM JSON 无效会自动 repair 一次，第二次仍失败则终止 run，不生成伪造的通用业务 fallback。
-- Agent 协作从“截断前序输出”改为“契约文件 + 实际文件”为事实来源。
+- Agent 协作从"截断前序输出"改为"契约文件 + 实际文件"为事实来源。
 - `runTeam()` 保持简单入口，同时新增 `TeamRun` 事件和控制 API。
 - `bash` 安全策略已收窄到危险删除、依赖安装、Docker build/up、长驻服务启动等高风险命令，允许 `mkdir`、`touch`、`cp`、`mv` 等正常项目构建命令。
 - DevOps 式任务不再要求 `npm install && npm start`。
 - 模型解析保留 `ModelRegistry` 路径，并继续防御 custom `baseUrl + openai provider` 兼容端点。
+- **循环依赖检测已实现** — `validateAcyclicTasks()` 使用标准 DFS 环检测，planner.test.ts 有对应测试。
+
+## 当前已知问题摘要
+
+> 完整缺陷列表见 `docs/architecture-audit.md` 第 5 节。
+
+| 严重度 | 关键问题 |
+|--------|---------|
+| CRITICAL | 并行任务失败归因错误（Promise.allSettled 后 find(in_progress) 匹配错误任务） |
+| HIGH | npm scripts 任意代码执行（validator 执行 LLM 生成的 package.json scripts 无清洗） |
+| HIGH | 中止原因误归因、provider/model API Key 注册跳过、硬编码角色名 |
+| HIGH | Bash 安全缺口、文件归属守卫不覆盖 bash、核心模块无测试 |
+| MEDIUM | parseInt NaN 导致无限修复循环、静态检查提前返回浪费修复轮次 |
+| MEDIUM | systemPrompt 注入、ownedDirectories "." 破坏隔离、repair task 路由到 plan.tasks[0] |
+| MEDIUM | getApiKey 忽略 provider 参数、validationRules 从未消费 |
 
 ## 仍需后续增强
 
-- Validator 仍是轻量静态验证，后续需要增强 AST/OpenAPI/router/client 对齐。
-- TUI 是首版运行视图，后续应增强 steering 输入、任务详情面板、issue 定位和审批体验。
-- WebUI 尚未实现，但架构上可复用 `TeamRun` / `TeamEvent`。
-- 会话持久化和断点续跑尚未接入 `SessionManager`。
-- Planner 首版依赖普通 LLM JSON 输出，后续可以接入 provider-specific structured output，但不能引入业务领域模板 fallback。
+- **安全加固**：npm scripts 清洗/沙盒、bash 安全模式补全、文件归属覆盖 bash 写路径。
+- **Validator 增强**：后续需要增强 AST/OpenAPI/router/client 对齐、可配置运行时验证选项。
+- **TUI 体验**：首版运行视图，后续应增强 steering 输入、任务详情面板、issue 定位和审批体验。
+- **WebUI**：尚未实现，但架构上可复用 `TeamRun` / `TeamEvent`。
+- **会话持久化**：断点续跑尚未接入 `SessionManager`。
+- **Planner 增强**：可接入 provider-specific structured output，但不引入业务领域模板 fallback。
+- **公共 API 清理**：移除遗留导出、补齐类型导出、去重双重导出。
 
 ## 测试覆盖
 
-- `planner.test.ts`：LLM 输出解析、契约写入、JSON repair、规划失败、依赖和路径校验。
+- `planner.test.ts`：LLM 输出解析、契约写入、JSON repair、规划失败、依赖和路径校验、循环依赖检测。
 - `bash-safety.test.ts`：允许正常项目文件操作，阻断危险命令。
 - `validator.test.ts`：缺失产物和 OpenAPI 不一致检测。
 - `team-lead.test.ts`：注入 fake planner/agent 后的事件顺序、repair loop、规划失败不启动 worker。
 - `task-graph.test.ts` / `task-scheduler.test.ts`：动态 DAG 和调度基础能力。
+
+### 缺口
+
+- `team-runner.ts`：系统主入口、模型解析、暂停/恢复、审批流未测。
+- `team-agent.ts`：Agent 构造器、轮次强制、上下文压缩未测。
+- `tool-pool.ts`：工具池构建逻辑未测。
+- `config.ts`：配置加载和合并逻辑未测。
