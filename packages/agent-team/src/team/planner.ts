@@ -306,6 +306,7 @@ Required top-level shape:
 
 Rules:
 - You decide roles, tasks, dependencies, contracts, and validation rules from the actual requirement.
+- Prefer pure-JavaScript packages that install without native compilation. Never use packages that require node-gyp, prebuilds, or C++ build tools. For SQLite use sql.js instead of better-sqlite3. For bcrypt use bcryptjs. For sharp use canvas or a WASM alternative. If no pure-JS alternative exists, use the simplest API surface that avoids native addons.
 - Include openapi only if the project needs an HTTP API.
 - Include dataModel only if the project needs persistent or structured domain data.
 - Do not invent generic placeholder APIs or domain objects.

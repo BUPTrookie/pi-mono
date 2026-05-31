@@ -354,6 +354,12 @@ function createClient(
 		Object.assign(headers, optionsHeaders);
 	}
 
+	// Some OpenAI-compatible endpoints (e.g. Xiaomi MiMo) use api-key
+	// instead of Authorization: Bearer. Send both for maximum compatibility.
+	if (apiKey) {
+		headers["api-key"] = apiKey;
+	}
+
 	return new OpenAI({
 		apiKey,
 		baseURL: model.baseUrl,

@@ -275,11 +275,41 @@ function commandLabel(spec: CommandSpec): string {
 	return [spec.command, ...spec.args].join(" ");
 }
 
+const NATIVE_ADDON_FAILURE_PATTERNS = [
+	/node-gyp/i,
+	/Could not find any Visual Studio installation/i,
+	/Could not locate the bindings file/i,
+	/No prebuilt binaries found/i,
+	/gyp ERR!/i,
+	/Could not find binding file/i,
+	/prebuild-install.*warn.*install/i,
+];
+
+function isNativeAddonFailure(output: string): boolean {
+	return NATIVE_ADDON_FAILURE_PATTERNS.some((pattern) => pattern.test(output));
+}
+
 function issueForCommandFailure(spec: CommandSpec, result: CommandResult): ValidationIssue {
 	const suffix = result.timedOut
 		? `timed out after ${Math.round(spec.timeoutMs / 1000)}s`
 		: `exited with code ${result.exitCode}`;
 	const output = result.output ? `\nOutput:\n${result.output}` : "";
+
+	// Native addon failures are environment issues, not code bugs.
+	// Downgrade to warning so repair loops don't waste turns on unfixable problems.
+	if (isNativeAddonFailure(result.output)) {
+		return issue(
+			`native-addon-${spec.id}`,
+			`Native addon compilation failed: ${commandLabel(spec)} ${suffix}.${output}\n\nThis project uses packages that require native compilation (e.g. better-sqlite3, bcrypt, sharp). The agent runtime lacks C++ build tools. Use pure-JS alternatives: sql.js instead of better-sqlite3, bcryptjs instead of bcrypt, etc.`,
+			{
+				severity: "warning",
+				ownerRole: spec.ownerRole,
+				ownerTaskId: spec.ownerTaskId,
+				file: spec.file,
+			},
+		);
+	}
+
 	return issue(`runtime-check-${spec.id}`, `Runtime check failed: ${commandLabel(spec)} ${suffix}.${output}`, {
 		severity: "error",
 		ownerRole: spec.ownerRole,

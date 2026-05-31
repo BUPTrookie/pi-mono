@@ -81,10 +81,13 @@ function resolveModel(
 			return baseUrl ? { ...exact, baseUrl } : exact;
 		}
 
-		// Provider exists but model not found — build a custom model from provider template
+		// Provider exists but model not found — build a custom model from provider template.
+		// Custom endpoints (baseUrl) often only support /chat/completions, so force
+		// openai-completions api for max compatibility.
 		const providerModels = registry.getAll().filter((m) => m.provider === resolvedProvider);
 		if (providerModels.length > 0) {
-			const template = providerModels[0];
+			const completionsTemplate = providerModels.find((m) => (m as any).api === "openai-completions");
+			const template = completionsTemplate ?? { ...providerModels[0], api: "openai-completions" };
 			return {
 				...template,
 				id: resolvedModelId,
