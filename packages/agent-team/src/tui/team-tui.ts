@@ -41,6 +41,7 @@ export class TeamRunComponent implements Component {
 	private validationIssueCount = 0;
 	private repairRound = 0;
 	private currentTool = "-";
+	private supervision = "-";
 	private tasks = new Map<string, TaskViewState>();
 
 	constructor(
@@ -144,6 +145,20 @@ export class TeamRunComponent implements Component {
 				this.repairRound = event.round;
 				this.logs.push(`repair round ${event.round}: ${event.tasks.length} task(s)`);
 				break;
+			case "supervision_start":
+				this.supervision = `reviewing ${event.checkpoint}`;
+				this.logs.push(`supervision started: ${event.checkpoint}`);
+				break;
+			case "supervision_end": {
+				this.supervision = `${event.decision.decision} ${event.checkpoint}`;
+				this.logs.push(`supervision: ${this.supervision}: ${event.decision.summary}`);
+				for (const issue of event.decision.issues.slice(0, 2)) {
+					const owner = issue.ownerTaskId ?? issue.ownerRole ?? "-";
+					const file = issue.file ?? "-";
+					this.logs.push(`${issue.id} owner: ${owner} file: ${file} ${issue.severity}: ${issue.message}`);
+				}
+				break;
+			}
 			case "approval_requested":
 				this.approvalQueue.push(event.requestId);
 				this.logs.push(`approval requested: ${event.reason}`);
@@ -220,6 +235,7 @@ export class TeamRunComponent implements Component {
 			`completed: ${stats.completed} | running: ${stats.running} | failed: ${stats.failed} | pending: ${stats.pending}`,
 			`active: ${active} | validation round: ${this.validationRound} | repair round: ${this.repairRound} | issues: ${this.validationIssueCount} | ${approval}`,
 			`tool: ${this.currentTool}`,
+			`supervision: ${this.supervision}`,
 		];
 	}
 

@@ -15,6 +15,7 @@ export type RoleProfileId =
 	| "docs-engineer";
 
 export type InterventionMode = "none" | "approval" | "interactive";
+export type SupervisionMode = "off" | "milestone";
 
 export interface RoleDefinition {
 	name: AgentRoleName;
@@ -133,6 +134,9 @@ export interface TaskCheckResult {
 
 export type ValidationSeverity = "error" | "warning" | "info";
 
+export type SupervisorCheckpoint = "plan_created" | "task_end" | "validation_end" | "final_review";
+export type SupervisorDecisionKind = "accept" | "warn" | "request_repair" | "request_human";
+
 export interface ValidationIssue {
 	id: string;
 	severity: ValidationSeverity;
@@ -140,6 +144,14 @@ export interface ValidationIssue {
 	ownerRole?: AgentRoleName;
 	ownerTaskId?: string;
 	file?: string;
+}
+
+export interface SupervisorDecision {
+	checkpoint: SupervisorCheckpoint;
+	decision: SupervisorDecisionKind;
+	summary: string;
+	issues: ValidationIssue[];
+	recommendedActions: string[];
 }
 
 export interface RepairTask extends TaskSpec {
@@ -160,6 +172,7 @@ export interface TeamConfig {
 	maxParallelAgents?: number;
 	thinkingLevel?: ThinkingLevel;
 	interventionMode?: InterventionMode;
+	supervisionMode?: SupervisionMode;
 	maxRepairRounds?: number;
 }
 
@@ -198,6 +211,14 @@ export type TeamEvent =
 	| { type: "validation_start"; round: number; timestamp: number }
 	| { type: "validation_end"; round: number; issues: ValidationIssue[]; timestamp: number }
 	| { type: "repair_requested"; round: number; issues: ValidationIssue[]; tasks: RepairTask[]; timestamp: number }
+	| {
+			type: "supervision_start";
+			checkpoint: SupervisorCheckpoint;
+			taskId?: string;
+			round?: number;
+			timestamp: number;
+	  }
+	| { type: "supervision_end"; checkpoint: SupervisorCheckpoint; decision: SupervisorDecision; timestamp: number }
 	| { type: "run_paused"; timestamp: number }
 	| { type: "run_resumed"; timestamp: number }
 	| { type: "intervention"; message: string; timestamp: number };

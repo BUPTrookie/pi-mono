@@ -82,6 +82,18 @@ describe("execution recorder", () => {
 				timestamp: 1003,
 			},
 			{ type: "run_end", result, timestamp: 1004 },
+			{
+				type: "supervision_end",
+				checkpoint: "final_review",
+				decision: {
+					checkpoint: "final_review",
+					decision: "warn",
+					summary: "Review found minor risk",
+					issues: [{ id: "risk", severity: "warning", message: "Minor risk", apiKey: "secret-key" } as never],
+					recommendedActions: ["Document risk"],
+				},
+				timestamp: 1005,
+			},
 		];
 
 		for (const event of events) {
@@ -94,13 +106,14 @@ describe("execution recorder", () => {
 		const taskLog = readJsonl(join(baseDir, "tasks", "build_api.jsonl"));
 		const summary = readFileSync(join(baseDir, "run-summary.md"), "utf-8");
 
-		expect(mainLog.map((entry) => entry.seq)).toEqual([1, 2, 3, 4, 5]);
+		expect(mainLog.map((entry) => entry.seq)).toEqual([1, 2, 3, 4, 5, 6]);
 		expect(mainLog.map((entry) => entry.type)).toEqual([
 			"run_start",
 			"task_start",
 			"agent_event",
 			"task_end",
 			"run_end",
+			"supervision_end",
 		]);
 		expect(taskLog.map((entry) => entry.seq)).toEqual([2, 3, 4]);
 		expect(JSON.stringify(mainLog)).not.toContain("secret-key");
@@ -111,6 +124,9 @@ describe("execution recorder", () => {
 		);
 		expect(summary).toContain("node --check src/index.ts");
 		expect(summary).toContain("warn-1");
+		expect(summary).toContain("Supervisor Review");
+		expect(summary).toContain("Review found minor risk");
+		expect(JSON.stringify(mainLog)).not.toContain("secret-key");
 	});
 
 	it("creates the log directory before recording", () => {

@@ -121,6 +121,27 @@ describe("TeamRunComponent", () => {
 				timestamp: 7,
 			},
 			{ type: "validation_start", round: 1, timestamp: 8 },
+			{ type: "supervision_start", checkpoint: "validation_end", round: 1, timestamp: 9 },
+			{
+				type: "supervision_end",
+				checkpoint: "validation_end",
+				decision: {
+					checkpoint: "validation_end",
+					decision: "warn",
+					summary: "Supervisor found a routing risk",
+					issues: [
+						{
+							id: "supervisor-risk",
+							severity: "warning",
+							message: "Check owner",
+							ownerTaskId: "test-cli",
+							file: "docs/e2e-report.md",
+						},
+					],
+					recommendedActions: ["Review e2e report"],
+				},
+				timestamp: 10,
+			},
 		];
 
 		for (const event of events) component.push(event);
@@ -150,6 +171,8 @@ describe("TeamRunComponent", () => {
 		expect(rendered).toContain("running");
 		expect(rendered).toContain("approvals: approval-1");
 		expect(rendered).toContain("tool: build-cli write src/index.js");
+		expect(rendered).toContain("supervision: warn validation_end");
+		expect(rendered).toContain("Supervisor found a routing risk");
 		expect(rendered).toContain("Blocked bash: unsafe command");
 		expect(rendered).toContain("keys: p pause/resume | a approve | r reject | ctrl+c abort");
 	});

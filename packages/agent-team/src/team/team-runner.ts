@@ -13,7 +13,7 @@ import type {
 	TeamRun,
 } from "../types.js";
 import { createExecutionRecorder, type ExecutionRecorder } from "./execution-recorder.js";
-import { type TeamAgentRunner, TeamLead, type TeamValidatorRunner } from "./team-lead.js";
+import { type SupervisorRunner, type TeamAgentRunner, TeamLead, type TeamValidatorRunner } from "./team-lead.js";
 
 interface PendingApproval {
 	resolve: (decision: ApprovalDecision) => void;
@@ -26,6 +26,7 @@ export interface TeamRunOverrides {
 	plannerRunner?: PlannerRunner;
 	agentRunner?: TeamAgentRunner;
 	validatorRunner?: TeamValidatorRunner;
+	supervisorRunner?: SupervisorRunner;
 	getApiKey?: ApiKeyResolver;
 	recorderFactory?: (outputDir: string) => ExecutionRecorder;
 }
@@ -244,6 +245,7 @@ class DynamicTeamRun implements TeamRun {
 				this.overrides.agentRunner,
 				this.overrides.plannerRunner,
 				this.overrides.validatorRunner,
+				this.overrides.supervisorRunner,
 			);
 
 			result = await this.lead.orchestrate();

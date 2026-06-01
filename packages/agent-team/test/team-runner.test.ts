@@ -151,4 +151,42 @@ describe("TeamRun execution recording", () => {
 		expect(summary).toContain("Success: false");
 		expect(summary).toContain("worker failed");
 	});
+
+	it("passes supervisor runner overrides through dynamic team runs", async () => {
+		const outputBase = tempBase();
+		mkdirSync(outputBase, { recursive: true });
+		const checkpoints: string[] = [];
+		const run = createTeamRun(
+			{ ...config(outputBase), supervisionMode: "milestone" },
+			{
+				model,
+				plannerRunner: async () => plannerResult(),
+				agentRunner: async (_description, agentConfig) => ({
+					taskId: agentConfig.taskId ?? "",
+					success: true,
+					output: "ok",
+					filesCreated: [],
+					turnsUsed: 1,
+				}),
+				validatorRunner: async () => [],
+				supervisorRunner: async (checkpoint) => {
+					checkpoints.push(checkpoint);
+					return {
+						checkpoint,
+						decision: "accept",
+						summary: "ok",
+						issues: [],
+						recommendedActions: [],
+					};
+				},
+				getApiKey: () => "key",
+			},
+		);
+
+		const result = await run.start();
+
+		expect(result.success).toBe(true);
+		expect(checkpoints).toContain("plan_created");
+		expect(checkpoints).toContain("final_review");
+	});
 });

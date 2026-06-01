@@ -7,6 +7,7 @@ import type {
 	ApprovalDecision,
 	PlannerRunner,
 	RoleDefinition,
+	SupervisorDecision,
 	Task,
 	TaskResult,
 	TeamConfig,
@@ -17,6 +18,13 @@ import type {
 } from "../types.js";
 import { createLogger } from "../utils/logger.js";
 import { createRepairTasks, createRoleRegistry, llmPlannerRunner, taskFromSpec, writeContracts } from "./planner.js";
+import {
+	buildSupervisorContext,
+	runSupervisorReview,
+	type SupervisorCheckpoint,
+	type SupervisorRunner,
+	writeSupervisorDecision,
+} from "./supervisor.js";
 import { validateTeamOutputWithChecks } from "./validator.js";
 
 const log = createLogger("team-lead");
@@ -35,6 +43,7 @@ export type TeamValidatorRunner = (
 	plan: TeamPlan,
 	signal?: AbortSignal,
 ) => Promise<ValidationIssue[]>;
+export type { SupervisorRunner };
 
 function now(): number {
 	return Date.now();
@@ -111,9 +120,26 @@ function issuesFromTaskFailures(results: TaskResult[]): ValidationIssue[] {
 		}));
 }
 
+function issuesFromSupervisorDecision(decision: SupervisorDecision | undefined): ValidationIssue[] {
+	if (!decision) return [];
+	if (decision.decision === "request_human" && decision.issues.length === 0) {
+		return [
+			{
+				id: `supervisor-human-${decision.checkpoint}`,
+				severity: "error",
+				message: decision.summary,
+			},
+		];
+	}
+	return decision.issues;
+}
+
 export class TeamLead {
 	private abortController = new AbortController();
 	private validationIssues: ValidationIssue[] = [];
+	private recentEvents: TeamEvent[] = [];
+	private supervisorIssues: ValidationIssue[] = [];
+	private supervisionSequence = 0;
 
 	constructor(
 		private config: TeamConfig,
@@ -128,6 +154,7 @@ export class TeamLead {
 		private agentRunner: TeamAgentRunner = runTeamAgent,
 		private plannerRunner: PlannerRunner = llmPlannerRunner,
 		private validatorRunner: TeamValidatorRunner = validateTeamOutputWithChecks,
+		private supervisorRunner: SupervisorRunner = runSupervisorReview,
 	) {}
 
 	abort(): void {
@@ -139,7 +166,7 @@ export class TeamLead {
 		const signal = this.abortController.signal;
 		const maxRepairRounds = this.config.maxRepairRounds ?? 2;
 
-		this.emit({ type: "run_start", requirement, outputDir, timestamp: now() });
+		this.emitEvent({ type: "run_start", requirement, outputDir, timestamp: now() });
 		log.info(`Starting dynamic team orchestration for: ${requirement.slice(0, 80)}...`);
 		log.info(`Output directory: ${outputDir}`);
 
@@ -163,11 +190,12 @@ export class TeamLead {
 				totalTurns: 0,
 				error: `Planning failed: ${message}`,
 			};
-			this.emit({ type: "run_end", result, timestamp: now() });
+			this.emitEvent({ type: "run_end", result, timestamp: now() });
 			log.error(result.error ?? "Planning failed.");
 			return result;
 		}
-		this.emit({ type: "plan_created", plan, timestamp: now() });
+		this.emitEvent({ type: "plan_created", plan, timestamp: now() });
+		await this.supervise("plan_created", plan, {});
 
 		const roleRegistry = createRoleRegistry(plan);
 		const allResults: TaskResult[] = [];
@@ -180,13 +208,38 @@ export class TeamLead {
 			allResults.push(...runResult.results);
 			totalTurns += runResult.turns;
 
-			this.emit({ type: "validation_start", round, timestamp: now() });
-			const issues = [
+			this.emitEvent({ type: "validation_start", round, timestamp: now() });
+			let issues = [
 				...issuesFromTaskFailures(runResult.results),
 				...(await this.validatorRunner(outputDir, plan, signal)),
+				...this.supervisorIssues,
 			];
+			this.supervisorIssues = [];
 			this.validationIssues = issues;
-			this.emit({ type: "validation_end", round, issues, timestamp: now() });
+			this.emitEvent({ type: "validation_end", round, issues, timestamp: now() });
+			const validationDecision = await this.supervise("validation_end", plan, {
+				round,
+				validationIssues: issues,
+				allResults,
+			});
+			const validationSupervisorIssues = issuesFromSupervisorDecision(validationDecision);
+			if (validationSupervisorIssues.length > 0) {
+				issues = [...issues, ...validationSupervisorIssues];
+				this.validationIssues = issues;
+			}
+
+			if (!hasBlockingIssues(issues)) {
+				const finalDecision = await this.supervise("final_review", plan, {
+					round,
+					validationIssues: issues,
+					allResults,
+				});
+				const finalSupervisorIssues = issuesFromSupervisorDecision(finalDecision);
+				if (finalSupervisorIssues.length > 0) {
+					issues = [...issues, ...finalSupervisorIssues];
+					this.validationIssues = issues;
+				}
+			}
 
 			if (!hasBlockingIssues(issues)) {
 				const result: TeamResult = {
@@ -197,7 +250,7 @@ export class TeamLead {
 					plan,
 					validationIssues: issues,
 				};
-				this.emit({ type: "run_end", result, timestamp: now() });
+				this.emitEvent({ type: "run_end", result, timestamp: now() });
 				log.success("Dynamic team run completed successfully.");
 				return result;
 			}
@@ -212,14 +265,14 @@ export class TeamLead {
 					validationIssues: issues,
 					error: `Validation failed after ${round} repair rounds: ${issues.map((issue) => issue.message).join("; ")}`,
 				};
-				this.emit({ type: "run_end", result, timestamp: now() });
+				this.emitEvent({ type: "run_end", result, timestamp: now() });
 				log.error(result.error ?? "Validation failed.");
 				return result;
 			}
 
 			round++;
 			const repairTasks = createRepairTasks(plan, issues, round);
-			this.emit({ type: "repair_requested", round, issues, tasks: repairTasks, timestamp: now() });
+			this.emitEvent({ type: "repair_requested", round, issues, tasks: repairTasks, timestamp: now() });
 			if (repairTasks.length === 0) {
 				const result: TeamResult = {
 					success: false,
@@ -230,12 +283,12 @@ export class TeamLead {
 					validationIssues: issues,
 					error: "Validation failed and no repair tasks could be routed.",
 				};
-				this.emit({ type: "run_end", result, timestamp: now() });
+				this.emitEvent({ type: "run_end", result, timestamp: now() });
 				return result;
 			}
 
 			tasksToRun = repairTasks.map(taskFromSpec);
-			this.emit({
+			this.emitEvent({
 				type: "plan_updated",
 				plan,
 				reason: `Added ${repairTasks.length} repair task(s).`,
@@ -252,8 +305,81 @@ export class TeamLead {
 			validationIssues: this.validationIssues,
 			error: "Run aborted.",
 		};
-		this.emit({ type: "run_end", result, timestamp: now() });
+		this.emitEvent({ type: "run_end", result, timestamp: now() });
 		return result;
+	}
+
+	private emitEvent(event: TeamEvent): void {
+		this.recentEvents.push(event);
+		this.recentEvents = this.recentEvents.slice(-200);
+		this.emit(event);
+	}
+
+	private async supervise(
+		checkpoint: SupervisorCheckpoint,
+		plan: TeamPlan,
+		options: {
+			task?: Task;
+			taskResult?: TaskResult;
+			round?: number;
+			validationIssues?: ValidationIssue[];
+			allResults?: TaskResult[];
+		},
+	): Promise<SupervisorDecision | undefined> {
+		if ((this.config.supervisionMode ?? "off") !== "milestone") return undefined;
+		this.emitEvent({
+			type: "supervision_start",
+			checkpoint,
+			taskId: options.task?.id,
+			round: options.round,
+			timestamp: now(),
+		});
+		try {
+			const context = buildSupervisorContext({
+				checkpoint,
+				outputDir: this.config.outputDir,
+				requirement: this.config.requirement,
+				plan,
+				task: options.task,
+				taskResult: options.taskResult,
+				validationIssues: options.validationIssues ?? this.validationIssues,
+				recentEvents: this.recentEvents,
+				allTaskResults: options.allResults ?? [],
+			});
+			const decision = await this.supervisorRunner(checkpoint, context, {
+				model: this.model,
+				getApiKey: this.getApiKey,
+				signal: this.abortController.signal,
+			});
+			writeSupervisorDecision(this.config.outputDir, ++this.supervisionSequence, decision);
+			this.emitEvent({ type: "supervision_end", checkpoint, decision, timestamp: now() });
+			if (decision.decision === "request_human") {
+				this.emitEvent({
+					type: "intervention",
+					message: `Supervisor requested human input: ${decision.summary}`,
+					timestamp: now(),
+				});
+			}
+			return decision;
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			const decision = {
+				checkpoint,
+				decision: "warn" as const,
+				summary: `Supervisor review failed: ${message}`,
+				issues: [
+					{
+						id: `supervisor-failed-${checkpoint}`,
+						severity: "warning" as const,
+						message,
+					},
+				],
+				recommendedActions: ["Continue with deterministic validation."],
+			};
+			writeSupervisorDecision(this.config.outputDir, ++this.supervisionSequence, decision);
+			this.emitEvent({ type: "supervision_end", checkpoint, decision, timestamp: now() });
+			return decision;
+		}
 	}
 
 	private async runTasks(
@@ -278,7 +404,7 @@ export class TeamLead {
 
 			const batchPromises = batch.map(async (task) => {
 				scheduler.startTask(task.id);
-				this.emit({ type: "task_start", task, timestamp: now() });
+				this.emitEvent({ type: "task_start", task, timestamp: now() });
 				createLogger(task.role).info(`Starting task: ${task.subject}`);
 
 				const role = roleRegistry.get(task.role);
@@ -295,9 +421,9 @@ export class TeamLead {
 					interventionMode: this.config.interventionMode ?? "none",
 					taskId: task.id,
 					onTaskProgress: (message) =>
-						this.emit({ type: "task_progress", taskId: task.id, message, timestamp: now() }),
+						this.emitEvent({ type: "task_progress", taskId: task.id, message, timestamp: now() }),
 					onAgentEvent: (event) =>
-						this.emit({ type: "agent_event", taskId: task.id, role: task.role, event, timestamp: now() }),
+						this.emitEvent({ type: "agent_event", taskId: task.id, role: task.role, event, timestamp: now() }),
 					requestApproval: (request) => this.controls.requestApproval(request),
 				};
 
@@ -329,7 +455,14 @@ export class TeamLead {
 					};
 					graph.propagateFailure(task.id, error);
 					results.push(result);
-					this.emit({ type: "task_end", task: graph.getTask(task.id) ?? task, result, timestamp: now() });
+					const failedTask = graph.getTask(task.id) ?? task;
+					this.emitEvent({ type: "task_end", task: failedTask, result, timestamp: now() });
+					const decision = await this.supervise("task_end", plan, {
+						task: failedTask,
+						taskResult: result,
+						allResults: results,
+					});
+					this.supervisorIssues.push(...issuesFromSupervisorDecision(decision));
 					continue;
 				}
 
@@ -341,12 +474,19 @@ export class TeamLead {
 					graph.propagateFailure(completedTask.id, result.error ?? "Unknown agent failure");
 				}
 				results.push(result);
-				this.emit({
+				const emittedTask = graph.getTask(completedTask.id) ?? completedTask;
+				this.emitEvent({
 					type: "task_end",
-					task: graph.getTask(completedTask.id) ?? completedTask,
+					task: emittedTask,
 					result,
 					timestamp: now(),
 				});
+				const decision = await this.supervise("task_end", plan, {
+					task: emittedTask,
+					taskResult: result,
+					allResults: results,
+				});
+				this.supervisorIssues.push(...issuesFromSupervisorDecision(decision));
 			}
 		}
 

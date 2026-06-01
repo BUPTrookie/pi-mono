@@ -5,7 +5,7 @@ import { resolve } from "path";
 import { findConfigFile, mergeConfig } from "./config.js";
 import { runTeam } from "./team/team-runner.js";
 import { runTeamTui } from "./tui/team-tui.js";
-import type { InterventionMode, TeamConfig } from "./types.js";
+import type { InterventionMode, SupervisionMode, TeamConfig } from "./types.js";
 
 function isThinkingLevel(value: string): value is ThinkingLevel {
 	return (
@@ -22,6 +22,10 @@ function isInterventionMode(value: string): value is InterventionMode {
 	return value === "none" || value === "approval" || value === "interactive";
 }
 
+function isSupervisionMode(value: string): value is SupervisionMode {
+	return value === "off" || value === "milestone";
+}
+
 interface ParsedArgs {
 	requirement?: string;
 	outputDir?: string;
@@ -31,6 +35,7 @@ interface ParsedArgs {
 		thinkingLevel?: ThinkingLevel;
 		maxRepairRounds?: number;
 		interventionMode?: InterventionMode;
+		supervisionMode?: SupervisionMode;
 	};
 	configPath?: string;
 	help?: boolean;
@@ -77,6 +82,10 @@ function parseArgs(args: string[]): ParsedArgs {
 			if (!result.options) result.options = {};
 			const mode = args[++i];
 			if (isInterventionMode(mode)) result.options.interventionMode = mode;
+		} else if (arg === "--supervision-mode" && i + 1 < args.length) {
+			if (!result.options) result.options = {};
+			const mode = args[++i];
+			if (isSupervisionMode(mode)) result.options.supervisionMode = mode;
 		} else if (arg === "--interactive") {
 			result.interactive = true;
 			if (!result.options) result.options = {};
@@ -116,6 +125,7 @@ Options:
   --max-repair-rounds <n>    Max validation repair rounds (default: from config, or 2)
   --thinking-level <lvl>     Thinking level: off, minimal, low, medium, high, xhigh
   --intervention-mode <mode> none, approval, interactive (default: none)
+  --supervision-mode <mode>  off, milestone (default: off)
   --interactive              Run the TUI and enable approvals
   -h, --help                 Show this help message
 `);
@@ -149,6 +159,7 @@ async function main(): Promise<void> {
 		maxParallelAgents: merged.maxParallelAgents,
 		maxRepairRounds: merged.maxRepairRounds,
 		interventionMode: merged.interventionMode,
+		supervisionMode: merged.supervisionMode,
 		thinkingLevel: merged.thinkingLevel,
 	};
 

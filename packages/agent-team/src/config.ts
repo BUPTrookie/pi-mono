@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
-import type { InterventionMode, TeamConfig } from "./types.js";
+import type { InterventionMode, SupervisionMode, TeamConfig } from "./types.js";
 
 export interface AgentTeamConfigFile {
 	outputDir?: string;
@@ -16,6 +16,7 @@ export interface AgentTeamConfigFile {
 	thinkingLevel?: ThinkingLevel;
 	maxRepairRounds?: number;
 	interventionMode?: InterventionMode;
+	supervisionMode?: SupervisionMode;
 }
 
 const CONFIG_FILENAMES = ["agent-team.json"];
@@ -68,8 +69,12 @@ export function mergeConfig(
 		thinkingLevel?: ThinkingLevel;
 		maxRepairRounds?: number;
 		interventionMode?: InterventionMode;
+		supervisionMode?: SupervisionMode;
 	},
-): Pick<TeamConfig, "model" | "maxParallelAgents" | "thinkingLevel" | "maxRepairRounds" | "interventionMode"> {
+): Pick<
+	TeamConfig,
+	"model" | "maxParallelAgents" | "thinkingLevel" | "maxRepairRounds" | "interventionMode" | "supervisionMode"
+> {
 	const fileModel = fileConfig?.model;
 
 	return {
@@ -83,5 +88,6 @@ export function mergeConfig(
 		thinkingLevel: cliOptions?.thinkingLevel ?? fileConfig?.thinkingLevel,
 		maxRepairRounds: cliOptions?.maxRepairRounds ?? fileConfig?.maxRepairRounds,
 		interventionMode: cliOptions?.interventionMode ?? fileConfig?.interventionMode,
+		supervisionMode: cliOptions?.supervisionMode ?? fileConfig?.supervisionMode,
 	};
 }

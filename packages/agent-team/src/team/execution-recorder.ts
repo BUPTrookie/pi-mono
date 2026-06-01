@@ -1,6 +1,5 @@
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { AgentEvent } from "@mariozechner/pi-agent-core";
 import type { TeamEvent, TeamResult } from "../types.js";
 
 export interface RecordedTeamEvent {
@@ -18,6 +17,7 @@ export interface ExecutionRecorder {
 interface RecorderState {
 	validationRounds: Array<{ round: number; issues: number }>;
 	repairRounds: Array<{ round: number; issues: number; tasks: number }>;
+	supervisionReviews: Array<{ checkpoint: string; decision: string; summary: string }>;
 }
 
 /** Keys whose values should always be redacted (API keys, tokens, etc.) */
@@ -75,8 +75,7 @@ function redactValue(value: unknown, key = ""): unknown {
 }
 
 function redactEvent(event: TeamEvent): TeamEvent {
-	if (event.type !== "agent_event") return event;
-	return { ...event, event: redactValue(event.event) as AgentEvent };
+	return redactValue(event) as TeamEvent;
 }
 
 function writeJsonl(path: string, envelope: RecordedTeamEvent): void {
@@ -121,6 +120,13 @@ function formatRepairSummary(state: RecorderState): string {
 	].join("\n");
 }
 
+function formatSupervisorSummary(state: RecorderState): string {
+	if (state.supervisionReviews.length === 0) return "None";
+	return state.supervisionReviews
+		.map((review) => `- ${review.checkpoint}: ${review.decision}: ${review.summary}`)
+		.join("\n");
+}
+
 function buildSummary(result: TeamResult, state: RecorderState): string {
 	return [
 		"# Agent Team Run Summary",
@@ -144,6 +150,10 @@ function buildSummary(result: TeamResult, state: RecorderState): string {
 		"",
 		formatRepairSummary(state),
 		"",
+		"## Supervisor Review",
+		"",
+		formatSupervisorSummary(state),
+		"",
 		"## Validation Issues",
 		"",
 		formatIssueSummary(result),
@@ -159,7 +169,7 @@ export function createExecutionRecorder(outputDir: string): ExecutionRecorder {
 	const eventsPath = join(baseDir, "events.jsonl");
 	const summaryPath = join(baseDir, "run-summary.md");
 	let seq = 0;
-	const state: RecorderState = { validationRounds: [], repairRounds: [] };
+	const state: RecorderState = { validationRounds: [], repairRounds: [], supervisionReviews: [] };
 
 	mkdirSync(tasksDir, { recursive: true });
 
@@ -171,6 +181,12 @@ export function createExecutionRecorder(outputDir: string): ExecutionRecorder {
 				state.validationRounds.push({ round: event.round, issues: event.issues.length });
 			} else if (event.type === "repair_requested") {
 				state.repairRounds.push({ round: event.round, issues: event.issues.length, tasks: event.tasks.length });
+			} else if (event.type === "supervision_end") {
+				state.supervisionReviews.push({
+					checkpoint: event.checkpoint,
+					decision: event.decision.decision,
+					summary: event.decision.summary,
+				});
 			}
 
 			const safeEvent = redactEvent(event);

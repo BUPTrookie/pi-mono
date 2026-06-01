@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Api, Model } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
-import type { TeamAgentRunner, TeamLeadControls } from "../src/team/team-lead.js";
+import type { SupervisorRunner, TeamAgentRunner, TeamLeadControls } from "../src/team/team-lead.js";
 import { TeamLead } from "../src/team/team-lead.js";
 import type { PlannerResult, PlannerRunner, TeamConfig, TeamEvent } from "../src/types.js";
 
@@ -305,5 +305,166 @@ describe("TeamLead dynamic run", () => {
 		expect(e2eConfig?.prompt).toContain("End-to-End Verification Agent");
 		expect(e2eConfig?.prompt).toContain("ordinary unit tests");
 		expect(e2eConfig?.thinking).toBe("medium");
+	});
+
+	it("does not run supervisor when supervision mode is off", async () => {
+		const outputDir = tempProject();
+		mkdirSync(outputDir, { recursive: true });
+		let supervisorCalls = 0;
+		const supervisor: SupervisorRunner = async () => {
+			supervisorCalls++;
+			return {
+				checkpoint: "plan_created",
+				decision: "accept",
+				summary: "ok",
+				issues: [],
+				recommendedActions: [],
+			};
+		};
+
+		const lead = new TeamLead(
+			config(outputDir),
+			model,
+			() => "key",
+			() => undefined,
+			controls(),
+			async (_description, agentConfig) => ({
+				taskId: agentConfig.taskId ?? "",
+				success: true,
+				output: "ok",
+				filesCreated: [],
+				turnsUsed: 1,
+			}),
+			async () => plannerResult(),
+			async () => [],
+			supervisor,
+		);
+
+		const result = await lead.orchestrate();
+
+		expect(result.success).toBe(true);
+		expect(supervisorCalls).toBe(0);
+	});
+
+	it("runs milestone supervisor reviews for plan, tasks, validation, and final review", async () => {
+		const outputDir = tempProject();
+		mkdirSync(outputDir, { recursive: true });
+		const checkpoints: string[] = [];
+		const events: TeamEvent[] = [];
+		const supervisor: SupervisorRunner = async (checkpoint) => {
+			checkpoints.push(checkpoint);
+			return {
+				checkpoint,
+				decision: "accept",
+				summary: `${checkpoint} accepted`,
+				issues: [],
+				recommendedActions: [],
+			};
+		};
+
+		const lead = new TeamLead(
+			{ ...config(outputDir), supervisionMode: "milestone" },
+			model,
+			() => "key",
+			(event) => events.push(event),
+			controls(),
+			async (_description, agentConfig) => ({
+				taskId: agentConfig.taskId ?? "",
+				success: true,
+				output: "ok",
+				filesCreated: [],
+				turnsUsed: 1,
+			}),
+			async () => plannerResult(),
+			async () => [],
+			supervisor,
+		);
+
+		const result = await lead.orchestrate();
+
+		expect(result.success).toBe(true);
+		expect(checkpoints).toEqual(["plan_created", "task_end", "task_end", "validation_end", "final_review"]);
+		expect(events.map((event) => event.type)).toContain("supervision_start");
+		expect(events.map((event) => event.type)).toContain("supervision_end");
+	});
+
+	it("adds supervisor repair issues to the existing repair loop", async () => {
+		const outputDir = tempProject();
+		mkdirSync(outputDir, { recursive: true });
+		const taskIds: string[] = [];
+		const supervisor: SupervisorRunner = async (checkpoint) => ({
+			checkpoint,
+			decision: checkpoint === "validation_end" ? "request_repair" : "accept",
+			summary: "reviewed",
+			issues:
+				checkpoint === "validation_end"
+					? [
+							{
+								id: "supervisor-missing-cli",
+								severity: "error",
+								message: "CLI output still needs repair",
+								ownerTaskId: "build-cli",
+								file: "src/index.js",
+							},
+						]
+					: [],
+			recommendedActions: checkpoint === "validation_end" ? ["Repair build-cli"] : [],
+		});
+
+		const lead = new TeamLead(
+			{ ...config(outputDir), supervisionMode: "milestone", maxRepairRounds: 1 },
+			model,
+			() => "key",
+			() => undefined,
+			controls(),
+			async (_description, agentConfig) => {
+				taskIds.push(agentConfig.taskId ?? "");
+				return { taskId: agentConfig.taskId ?? "", success: true, output: "ok", filesCreated: [], turnsUsed: 1 };
+			},
+			async () => plannerResult(),
+			async () => [],
+			supervisor,
+		);
+
+		const result = await lead.orchestrate();
+
+		expect(result.success).toBe(false);
+		expect(taskIds).toContain("repair-1-build-cli");
+		expect(result.validationIssues?.some((issue) => issue.id === "supervisor-missing-cli")).toBe(true);
+	});
+
+	it("emits an intervention event when supervisor requests human input", async () => {
+		const outputDir = tempProject();
+		mkdirSync(outputDir, { recursive: true });
+		const events: TeamEvent[] = [];
+		const lead = new TeamLead(
+			{ ...config(outputDir), supervisionMode: "milestone", maxRepairRounds: 0 },
+			model,
+			() => "key",
+			(event) => events.push(event),
+			controls(),
+			async (_description, agentConfig) => ({
+				taskId: agentConfig.taskId ?? "",
+				success: true,
+				output: "ok",
+				filesCreated: [],
+				turnsUsed: 1,
+			}),
+			async () => plannerResult(),
+			async () => [],
+			async (checkpoint) => ({
+				checkpoint,
+				decision: checkpoint === "plan_created" ? "request_human" : "accept",
+				summary: checkpoint === "plan_created" ? "Need product clarification" : "ok",
+				issues: [],
+				recommendedActions: [],
+			}),
+		);
+
+		await lead.orchestrate();
+
+		expect(
+			events.some((event) => event.type === "intervention" && event.message.includes("Need product clarification")),
+		).toBe(true);
 	});
 });

@@ -31,6 +31,16 @@ export {
 	taskFromSpec,
 	writeContracts,
 } from "./team/planner.js";
+export {
+	buildSupervisorContext,
+	parseSupervisorDecision,
+	runSupervisorReview,
+	type SupervisorContext,
+	type SupervisorContextInput,
+	type SupervisorRunner,
+	type SupervisorRunnerOptions,
+	writeSupervisorDecision,
+} from "./team/supervisor.js";
 export { TeamLead } from "./team/team-lead.js";
 export { createTeamRun, runTeam, type TeamRunOverrides } from "./team/team-runner.js";
 export { type RuntimeValidationOptions, validateTeamOutput, validateTeamOutputWithChecks } from "./team/validator.js";
@@ -49,6 +59,10 @@ export type {
 	RoleDefinition,
 	RoleProfileId,
 	RoleSpec,
+	SupervisionMode,
+	SupervisorCheckpoint,
+	SupervisorDecision,
+	SupervisorDecisionKind,
 	Task,
 	TaskResult,
 	TaskSpec,
