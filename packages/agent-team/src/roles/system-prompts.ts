@@ -21,7 +21,7 @@ Collaboration contract:
 - Treat acceptance criteria in the task prompt as mandatory.
 - Prefer small, coherent files over unrelated broad rewrites.
 - Do not run long-lived services or dependency installation commands unless explicitly approved.
-- Report what you changed, which contract entries you satisfied, and anything left unresolved.
+${role.profile === "e2e-verifier" ? "- You MAY start local servers for end-to-end verification with node app.js &, npm run start &, npm run preview, or npm run serve. Stop started servers before finishing.\n" : ""}${role.profile === "e2e-verifier" ? "- You MUST send real HTTP requests only to localhost or 127.0.0.1 with curl/wget and report the actual observed responses in the e2e report.\n" : ""}- Report what you changed, which contract entries you satisfied, and anything left unresolved.
 
 Profile-specific instructions:
 ${profile.instructions.map((instruction) => `- ${instruction}`).join("\n")}

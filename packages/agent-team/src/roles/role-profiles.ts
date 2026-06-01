@@ -14,6 +14,7 @@ export interface RoleProfile {
 
 const FULL_TOOLSET = ["read", "write", "edit", "bash", "grep", "find", "ls"];
 const READ_AND_CHECK_TOOLS = ["read", "write", "edit", "bash", "grep", "find", "ls"];
+const DOCS_TOOLSET = ["read", "write", "edit", "grep", "find", "ls"];
 
 export const ROLE_PROFILE_IDS = [
 	"project-setup",
@@ -101,17 +102,19 @@ const ROLE_PROFILES: Record<RoleProfileId, RoleProfile> = {
 		thinkingLevelOverride: "medium",
 		skillHints: ["end-to-end testing", "acceptance verification", "delivery review"],
 		instructions: [
-			"Verify complete user workflows across the finished project, including API, UI, CLI, scripts, or docs as applicable.",
+			"Verify complete user workflows by actually running the service and sending real HTTP requests.",
+			"For HTTP servers: start in background with node src/app.js &, npm run start &, npm run preview, or npm run serve; use only localhost or 127.0.0.1 URLs; verify responses; then stop the server.",
+			"For CLIs: run with sample inputs and verify the output matches expectations.",
+			"Run npm test (or equivalent) and report exit code and any failures.",
 			"Do not write ordinary unit tests; unit and module tests belong to implementation or test-engineer tasks.",
-			"Run the most representative project-level checks that are safe and available.",
-			"Write docs/e2e-report.md with commands run, observed results, remaining risks, and acceptance status.",
+			"Write docs/e2e-report.md with every command you ran, actual observed output, remaining risks, and acceptance status.",
 		],
 	},
 	"docs-engineer": {
 		id: "docs-engineer",
 		systemPromptTitle: "Documentation Agent",
 		description: "Writes usage documentation, handoff notes, and project-facing docs.",
-		allowedTools: FULL_TOOLSET,
+		allowedTools: DOCS_TOOLSET,
 		maxTurns: 25,
 		skillHints: ["technical writing", "handoff documentation", "usage instructions"],
 		instructions: [

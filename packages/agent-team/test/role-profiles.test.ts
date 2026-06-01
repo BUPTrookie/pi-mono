@@ -37,8 +37,16 @@ describe("role profiles", () => {
 		const prompt = buildRoleSystemPrompt(role("e2e-verifier"));
 
 		expect(prompt).toContain("End-to-End Verification Agent");
+		expect(prompt).toContain("npm run start");
+		expect(prompt).toContain("localhost");
 		expect(prompt).toContain("ordinary unit tests");
 		expect(prompt).toContain("docs/e2e-report.md");
 		expect(prompt).toContain("complete user workflows");
+	});
+
+	it("keeps docs engineer away from bash execution", () => {
+		const profile = getRoleProfile("docs-engineer");
+
+		expect(profile?.allowedTools).toEqual(["read", "write", "edit", "grep", "find", "ls"]);
 	});
 });

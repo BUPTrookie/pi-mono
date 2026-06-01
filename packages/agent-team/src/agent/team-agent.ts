@@ -207,6 +207,7 @@ export async function runTeamAgent(taskDescription: string, config: TeamAgentCon
 		taskId: config.taskId ?? role.name,
 		interventionMode: config.interventionMode ?? "none",
 		requestApproval: config.requestApproval,
+		allowLocalServerLifecycle: role.profile === "e2e-verifier",
 	});
 
 	const agent = new Agent({

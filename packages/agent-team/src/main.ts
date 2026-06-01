@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
-import { resolve } from "path";
 import { findConfigFile, mergeConfig } from "./config.js";
 import { runTeam } from "./team/team-runner.js";
 import { runTeamTui } from "./tui/team-tui.js";
@@ -42,8 +43,8 @@ interface ParsedArgs {
 	interactive?: boolean;
 }
 
-function parseArgs(args: string[]): ParsedArgs {
-	const result: ParsedArgs = {};
+export function parseArgs(args: string[]): ParsedArgs {
+	const result: ParsedArgs = { interactive: true };
 	let positionalCount = 0;
 
 	for (let i = 0; i < args.length; i++) {
@@ -90,6 +91,8 @@ function parseArgs(args: string[]): ParsedArgs {
 			result.interactive = true;
 			if (!result.options) result.options = {};
 			result.options.interventionMode = "interactive";
+		} else if (arg === "--no-interactive") {
+			result.interactive = false;
 		} else if (!arg.startsWith("-") && positionalCount === 0) {
 			result.requirement = arg;
 			positionalCount++;
@@ -124,9 +127,10 @@ Options:
   --max-parallel <n>         Max parallel agents (default: from config, or 2)
   --max-repair-rounds <n>    Max validation repair rounds (default: from config, or 2)
   --thinking-level <lvl>     Thinking level: off, minimal, low, medium, high, xhigh
-  --intervention-mode <mode> none, approval, interactive (default: none)
+  --intervention-mode <mode> none, approval, interactive (default: interactive with TUI)
   --supervision-mode <mode>  off, milestone (default: off)
-  --interactive              Run the TUI and enable approvals
+  --interactive              Run the TUI and enable approvals (default)
+  --no-interactive           Run without the TUI
   -h, --help                 Show this help message
 `);
 }
@@ -185,7 +189,9 @@ async function main(): Promise<void> {
 	process.exit(result.success ? 0 : 1);
 }
 
-main().catch((err) => {
-	console.error("Fatal error:", err);
-	process.exit(1);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+	main().catch((err) => {
+		console.error("Fatal error:", err);
+		process.exit(1);
+	});
+}
