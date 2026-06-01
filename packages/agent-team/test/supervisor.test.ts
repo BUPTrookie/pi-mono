@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
 	buildSupervisorContext,
+	createSupervisorContextCache,
 	parseSupervisorDecision,
 	type SupervisorCheckpoint,
 	writeSupervisorDecision,
@@ -188,6 +189,30 @@ describe("supervisor", () => {
 		const review = readFileSync(join(outputDir, "docs", "agent-team", "team-leader-review.md"), "utf-8");
 		expect(review).toContain("Task warning");
 		expect(review).toContain("Final ok");
+	});
+
+	it("reuses cached contract content across checkpoints", () => {
+		const outputDir = tempProject();
+		mkdirSync(join(outputDir, "docs", "contracts"), { recursive: true });
+		writeFileSync(join(outputDir, "docs/contracts/project-manifest.json"), "first content", "utf-8");
+		const cache = createSupervisorContextCache();
+		const baseInput = {
+			outputDir,
+			requirement: "Build a CLI",
+			plan: plan(),
+			task: plan().tasks[0],
+			validationIssues: [],
+			recentEvents: [],
+			allTaskResults: [],
+			cache,
+		};
+
+		const first = buildSupervisorContext({ ...baseInput, checkpoint: "task_end" as const });
+		writeFileSync(join(outputDir, "docs/contracts/project-manifest.json"), "changed content", "utf-8");
+		const second = buildSupervisorContext({ ...baseInput, checkpoint: "validation_end" as const });
+
+		expect(first.contracts[0]?.content).toBe("first content");
+		expect(second.contracts[0]?.content).toBe("first content");
 	});
 });
 

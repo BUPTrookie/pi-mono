@@ -20,8 +20,10 @@ import { createLogger } from "../utils/logger.js";
 import { createRepairTasks, createRoleRegistry, llmPlannerRunner, taskFromSpec, writeContracts } from "./planner.js";
 import {
 	buildSupervisorContext,
+	createSupervisorContextCache,
 	runSupervisorReview,
 	type SupervisorCheckpoint,
+	type SupervisorContextCache,
 	type SupervisorRunner,
 	writeSupervisorDecision,
 } from "./supervisor.js";
@@ -38,12 +40,25 @@ export interface TeamLeadControls {
 }
 
 export type TeamAgentRunner = (taskDescription: string, config: TeamAgentConfig) => Promise<TaskResult>;
+export type TeamApiKeyResolver = (provider: string) => Promise<string | undefined> | string | undefined;
 export type TeamValidatorRunner = (
 	outputDir: string,
 	plan: TeamPlan,
 	signal?: AbortSignal,
 ) => Promise<ValidationIssue[]>;
 export type { SupervisorRunner };
+
+export interface TeamLeadDependencies {
+	config: TeamConfig;
+	model: Model<Api>;
+	getApiKey: TeamApiKeyResolver;
+	emit?: TeamEventEmitter;
+	controls?: TeamLeadControls;
+	agentRunner?: TeamAgentRunner;
+	plannerRunner?: PlannerRunner;
+	validatorRunner?: TeamValidatorRunner;
+	supervisorRunner?: SupervisorRunner;
+}
 
 function now(): number {
 	return Date.now();
@@ -126,28 +141,103 @@ function issuesFromSupervisorDecision(decision: SupervisorDecision | undefined):
 	return decision.issues;
 }
 
+function defaultControls(): TeamLeadControls {
+	return {
+		waitIfPaused: async () => undefined,
+		requestApproval: async () => "reject",
+		getInterventions: () => [],
+	};
+}
+
+function isTeamLeadDependencies(value: TeamConfig | TeamLeadDependencies): value is TeamLeadDependencies {
+	return "config" in value && "getApiKey" in value;
+}
+
+function classifySupervisorFailure(message: string): { id: string; label: string; action: string } {
+	if (/valid json|unknown supervisor|request_repair issues|returned checkpoint/i.test(message)) {
+		return {
+			id: "parse",
+			label: "parse error",
+			action: "Check the supervisor prompt and strict JSON schema.",
+		};
+	}
+	if (/stopped with|rate|429|timeout|timed out|network|fetch|econn|enotfound|etimedout/i.test(message)) {
+		return {
+			id: "model",
+			label: "model/API error",
+			action: "Check model availability, network/API limits, and retry configuration.",
+		};
+	}
+	return {
+		id: "runtime",
+		label: "runtime error",
+		action: "Inspect the supervisor runner and context construction path.",
+	};
+}
+
 export class TeamLead {
 	private abortController = new AbortController();
 	private validationIssues: ValidationIssue[] = [];
 	private recentEvents: TeamEvent[] = [];
 	private supervisorIssues: ValidationIssue[] = [];
 	private supervisionSequence = 0;
+	private supervisorContextCache: SupervisorContextCache = createSupervisorContextCache();
+	private config: TeamConfig;
+	private model: Model<Api>;
+	private getApiKey: TeamApiKeyResolver;
+	private emit: TeamEventEmitter;
+	private controls: TeamLeadControls;
+	private agentRunner: TeamAgentRunner;
+	private plannerRunner: PlannerRunner;
+	private validatorRunner: TeamValidatorRunner;
+	private supervisorRunner: SupervisorRunner;
 
+	constructor(dependencies: TeamLeadDependencies);
 	constructor(
-		private config: TeamConfig,
-		private model: Model<Api>,
-		private getApiKey: (provider: string) => Promise<string | undefined> | string | undefined,
-		private emit: TeamEventEmitter = () => undefined,
-		private controls: TeamLeadControls = {
-			waitIfPaused: async () => undefined,
-			requestApproval: async () => "reject",
-			getInterventions: () => [],
-		},
-		private agentRunner: TeamAgentRunner = runTeamAgent,
-		private plannerRunner: PlannerRunner = llmPlannerRunner,
-		private validatorRunner: TeamValidatorRunner = validateTeamOutputWithChecks,
-		private supervisorRunner: SupervisorRunner = runSupervisorReview,
-	) {}
+		config: TeamConfig,
+		model: Model<Api>,
+		getApiKey: TeamApiKeyResolver,
+		emit?: TeamEventEmitter,
+		controls?: TeamLeadControls,
+		agentRunner?: TeamAgentRunner,
+		plannerRunner?: PlannerRunner,
+		validatorRunner?: TeamValidatorRunner,
+		supervisorRunner?: SupervisorRunner,
+	);
+	constructor(
+		configOrDependencies: TeamConfig | TeamLeadDependencies,
+		model?: Model<Api>,
+		getApiKey?: TeamApiKeyResolver,
+		emit: TeamEventEmitter = () => undefined,
+		controls: TeamLeadControls = defaultControls(),
+		agentRunner: TeamAgentRunner = runTeamAgent,
+		plannerRunner: PlannerRunner = llmPlannerRunner,
+		validatorRunner: TeamValidatorRunner = validateTeamOutputWithChecks,
+		supervisorRunner: SupervisorRunner = runSupervisorReview,
+	) {
+		if (isTeamLeadDependencies(configOrDependencies)) {
+			this.config = configOrDependencies.config;
+			this.model = configOrDependencies.model;
+			this.getApiKey = configOrDependencies.getApiKey;
+			this.emit = configOrDependencies.emit ?? (() => undefined);
+			this.controls = configOrDependencies.controls ?? defaultControls();
+			this.agentRunner = configOrDependencies.agentRunner ?? runTeamAgent;
+			this.plannerRunner = configOrDependencies.plannerRunner ?? llmPlannerRunner;
+			this.validatorRunner = configOrDependencies.validatorRunner ?? validateTeamOutputWithChecks;
+			this.supervisorRunner = configOrDependencies.supervisorRunner ?? runSupervisorReview;
+			return;
+		}
+		if (!model || !getApiKey) throw new Error("TeamLead requires model and getApiKey.");
+		this.config = configOrDependencies;
+		this.model = model;
+		this.getApiKey = getApiKey;
+		this.emit = emit;
+		this.controls = controls;
+		this.agentRunner = agentRunner;
+		this.plannerRunner = plannerRunner;
+		this.validatorRunner = validatorRunner;
+		this.supervisorRunner = supervisorRunner;
+	}
 
 	abort(): void {
 		this.abortController.abort();
@@ -346,6 +436,7 @@ export class TeamLead {
 				validationIssues: options.validationIssues ?? this.validationIssues,
 				recentEvents: this.recentEvents,
 				allTaskResults: options.allResults ?? [],
+				cache: this.supervisorContextCache,
 			});
 			const decision = await this.supervisorRunner(checkpoint, context, {
 				model: this.model,
@@ -364,18 +455,19 @@ export class TeamLead {
 			return decision;
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
+			const failure = classifySupervisorFailure(message);
 			const decision = {
 				checkpoint,
 				decision: "warn" as const,
-				summary: `Supervisor review failed: ${message}`,
+				summary: `Supervisor review failed (${failure.label}): ${message}`,
 				issues: [
 					{
-						id: `supervisor-failed-${checkpoint}`,
+						id: `supervisor-${failure.id}-failed-${checkpoint}`,
 						severity: "warning" as const,
 						message,
 					},
 				],
-				recommendedActions: ["Continue with deterministic validation."],
+				recommendedActions: [failure.action, "Continue with deterministic validation."],
 			};
 			this.persistSupervisorDecision(decision);
 			this.emitEvent({ type: "supervision_end", checkpoint, decision, timestamp: now() });
@@ -440,6 +532,7 @@ export class TeamLead {
 			});
 
 			const settledResults = await Promise.allSettled(batchPromises);
+			const supervisionRequests: Array<{ task: Task; result: TaskResult }> = [];
 			for (let index = 0; index < settledResults.length; index++) {
 				const settled = settledResults[index];
 				const task = batch[index];
@@ -458,12 +551,7 @@ export class TeamLead {
 					results.push(result);
 					const failedTask = graph.getTask(task.id) ?? task;
 					this.emitEvent({ type: "task_end", task: failedTask, result, timestamp: now() });
-					const decision = await this.supervise("task_end", plan, {
-						task: failedTask,
-						taskResult: result,
-						allResults: results,
-					});
-					this.supervisorIssues.push(...issuesFromSupervisorDecision(decision));
+					supervisionRequests.push({ task: failedTask, result });
 					continue;
 				}
 
@@ -482,11 +570,18 @@ export class TeamLead {
 					result,
 					timestamp: now(),
 				});
-				const decision = await this.supervise("task_end", plan, {
-					task: emittedTask,
-					taskResult: result,
-					allResults: results,
-				});
+				supervisionRequests.push({ task: emittedTask, result });
+			}
+			const decisions = await Promise.all(
+				supervisionRequests.map(({ task, result }) =>
+					this.supervise("task_end", plan, {
+						task,
+						taskResult: result,
+						allResults: results,
+					}),
+				),
+			);
+			for (const decision of decisions) {
 				this.supervisorIssues.push(...issuesFromSupervisorDecision(decision));
 			}
 		}

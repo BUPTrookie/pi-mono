@@ -509,4 +509,82 @@ describe("TeamLead dynamic run", () => {
 		expect(result.success).toBe(true);
 		expect(events.some((event) => event.type === "supervision_end")).toBe(true);
 	});
+
+	it("reviews completed tasks in a batch without serial supervisor waits", async () => {
+		const outputDir = tempProject();
+		mkdirSync(outputDir, { recursive: true });
+		let activeTaskReviews = 0;
+		let maxActiveTaskReviews = 0;
+		const supervisor: SupervisorRunner = async (checkpoint) => {
+			if (checkpoint === "task_end") {
+				activeTaskReviews++;
+				maxActiveTaskReviews = Math.max(maxActiveTaskReviews, activeTaskReviews);
+				await new Promise((resolve) => setTimeout(resolve, 20));
+				activeTaskReviews--;
+			}
+			return {
+				checkpoint,
+				decision: "accept",
+				summary: "ok",
+				issues: [],
+				recommendedActions: [],
+			};
+		};
+
+		const lead = new TeamLead({
+			config: { ...config(outputDir), supervisionMode: "milestone", maxRepairRounds: 0 },
+			model,
+			getApiKey: () => "key",
+			emit: () => undefined,
+			controls: controls(),
+			agentRunner: async (_description, agentConfig) => ({
+				taskId: agentConfig.taskId ?? "",
+				success: true,
+				output: "ok",
+				filesCreated: [],
+				turnsUsed: 1,
+			}),
+			plannerRunner: async () => parallelPlannerResult(),
+			validatorRunner: async () => [],
+			supervisorRunner: supervisor,
+		});
+
+		const result = await lead.orchestrate();
+
+		expect(result.success).toBe(true);
+		expect(maxActiveTaskReviews).toBe(2);
+	});
+
+	it("adds diagnostic categories when supervisor reviews fail", async () => {
+		const outputDir = tempProject();
+		mkdirSync(outputDir, { recursive: true });
+		const events: TeamEvent[] = [];
+		const lead = new TeamLead({
+			config: { ...config(outputDir), supervisionMode: "milestone", maxRepairRounds: 0 },
+			model,
+			getApiKey: () => "key",
+			emit: (event) => events.push(event),
+			controls: controls(),
+			agentRunner: async (_description, agentConfig) => ({
+				taskId: agentConfig.taskId ?? "",
+				success: true,
+				output: "ok",
+				filesCreated: [],
+				turnsUsed: 1,
+			}),
+			plannerRunner: async () => plannerResult(),
+			validatorRunner: async () => [],
+			supervisorRunner: async () => {
+				throw new Error("Supervisor output must be valid JSON: Unexpected token");
+			},
+		});
+
+		const result = await lead.orchestrate();
+		const supervisorEnd = events.find((event) => event.type === "supervision_end");
+
+		expect(result.success).toBe(true);
+		expect(supervisorEnd?.type).toBe("supervision_end");
+		expect(supervisorEnd?.decision.issues[0]?.id).toContain("supervisor-parse-failed");
+		expect(supervisorEnd?.decision.summary).toContain("parse");
+	});
 });

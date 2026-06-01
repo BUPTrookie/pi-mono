@@ -1,6 +1,7 @@
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { TeamEvent, TeamResult } from "../types.js";
+import { sanitizeTaskId } from "../utils/shared.js";
 
 export interface RecordedTeamEvent {
 	seq: number;
@@ -31,10 +32,6 @@ const STREAMING_DELTA_TYPES = new Set([
 	"toolcall_delta",
 	"tool_execution_update",
 ]);
-
-function sanitizeTaskId(taskId: string): string {
-	return taskId.replace(/[^a-zA-Z0-9._-]/g, "_");
-}
 
 function isStreamingDelta(event: TeamEvent): boolean {
 	if (event.type !== "agent_event") return false;

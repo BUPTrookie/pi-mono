@@ -5,6 +5,7 @@ import { Agent, type AgentEvent, type AgentMessage, type StreamFn } from "@mario
 import type { Model } from "@mariozechner/pi-ai";
 import { convertToLlm } from "@mariozechner/pi-coding-agent";
 import type { ApprovalDecision, InterventionMode, RoleDefinition, TaskCheckResult, TaskResult } from "../types.js";
+import { extractTextContent, isRecord, sanitizeTaskId } from "../utils/shared.js";
 import { createBashSafetyGuard } from "./bash-safety.js";
 import { createOwnershipGuard } from "./file-ownership.js";
 import { buildToolPool } from "./tool-pool.js";
@@ -31,13 +32,7 @@ function extractFinalText(messages: AgentMessage[]): string {
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const msg = messages[i];
 		if (msg.role === "assistant") {
-			const parts: string[] = [];
-			for (const block of msg.content) {
-				if (block.type === "text") {
-					parts.push(block.text);
-				}
-			}
-			const text = parts.join("\n").trim();
+			const text = extractTextContent(msg.content);
 			if (text) return text;
 		}
 	}
@@ -61,14 +56,6 @@ function extractFilesCreated(messages: AgentMessage[]): string[] {
 		}
 	}
 	return [...files];
-}
-
-function sanitizeTaskId(taskId: string): string {
-	return taskId.replace(/[^a-zA-Z0-9._-]/g, "_");
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function extractExitCode(result: unknown, isError: boolean): number | null {

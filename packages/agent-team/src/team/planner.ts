@@ -17,6 +17,7 @@ import type {
 	TeamPlan,
 	ValidationIssue,
 } from "../types.js";
+import { extractJsonText, extractTextContent, isRecord } from "../utils/shared.js";
 
 interface RawPlannerJson {
 	teamPlan?: unknown;
@@ -65,10 +66,6 @@ export function taskFromSpec(spec: TaskSpec): Task {
 
 function contract(path: string, kind: ContractSpec["kind"], required: boolean): ContractSpec {
 	return { path, kind, required };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isStringArray(value: unknown): value is string[] {
@@ -315,31 +312,13 @@ function validatePlannerJson(raw: RawPlannerJson): PlannerResult {
 	return { plan, contracts, diagnostics: [] };
 }
 
-function stripCodeFence(text: string): string {
-	const trimmed = text.trim();
-	const match = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(trimmed);
-	return match ? match[1].trim() : trimmed;
-}
-
-function extractJsonText(text: string): string {
-	const stripped = stripCodeFence(text);
-	const first = stripped.indexOf("{");
-	const last = stripped.lastIndexOf("}");
-	if (first === -1 || last === -1 || last <= first) return stripped;
-	return stripped.slice(first, last + 1);
-}
-
 export function parsePlannerOutput(text: string): PlannerResult {
 	const parsed = JSON.parse(extractJsonText(text)) as RawPlannerJson;
 	return validatePlannerJson(parsed);
 }
 
 function extractAssistantText(message: Awaited<ReturnType<typeof completeSimple>>): string {
-	return message.content
-		.filter((block) => block.type === "text")
-		.map((block) => block.text)
-		.join("\n")
-		.trim();
+	return extractTextContent(message.content);
 }
 
 function plannerSystemPrompt(): string {

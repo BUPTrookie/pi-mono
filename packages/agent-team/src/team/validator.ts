@@ -3,6 +3,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { explainUnsafeBash } from "../agent/bash-safety.js";
 import type { TaskCheckResult, TeamPlan, ValidationIssue } from "../types.js";
+import { sanitizeTaskId } from "../utils/shared.js";
 
 interface PackageJson {
 	main?: string;
@@ -141,10 +142,6 @@ function readJson(path: string): Record<string, unknown> | undefined {
 	} catch {
 		return undefined;
 	}
-}
-
-function sanitizeTaskId(taskId: string): string {
-	return taskId.replace(/[^a-zA-Z0-9._-]/g, "_");
 }
 
 function readHandoff(outputDir: string, taskId: string): HandoffFile | undefined {

@@ -232,21 +232,21 @@ class DynamicTeamRun implements TeamRun {
 					return key;
 				});
 
-			this.lead = new TeamLead(
-				projectConfig,
+			this.lead = new TeamLead({
+				config: projectConfig,
 				model,
 				getApiKey,
-				(event) => this.emit(event),
-				{
+				emit: (event) => this.emit(event),
+				controls: {
 					waitIfPaused: () => this.waitIfPaused(),
 					requestApproval: (request) => this.requestApproval(request.taskId, request.reason, request.command),
 					getInterventions: () => [...this.interventions],
 				},
-				this.overrides.agentRunner,
-				this.overrides.plannerRunner,
-				this.overrides.validatorRunner,
-				this.overrides.supervisorRunner,
-			);
+				agentRunner: this.overrides.agentRunner,
+				plannerRunner: this.overrides.plannerRunner,
+				validatorRunner: this.overrides.validatorRunner,
+				supervisorRunner: this.overrides.supervisorRunner,
+			});
 
 			result = await this.lead.orchestrate();
 			return result;

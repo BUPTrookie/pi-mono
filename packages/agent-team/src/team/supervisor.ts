@@ -12,6 +12,7 @@ import type {
 	TeamPlan,
 	ValidationIssue,
 } from "../types.js";
+import { extractJsonText, extractTextContent, isRecord, sanitizeTaskId } from "../utils/shared.js";
 
 export type SupervisorCheckpoint = BaseSupervisorCheckpoint;
 
@@ -25,6 +26,7 @@ export interface SupervisorContextInput {
 	validationIssues: ValidationIssue[];
 	recentEvents: TeamEvent[];
 	allTaskResults: TaskResult[];
+	cache?: SupervisorContextCache;
 }
 
 export interface SupervisorContext {
@@ -54,26 +56,16 @@ export type SupervisorRunner = (
 	options: SupervisorRunnerOptions,
 ) => Promise<SupervisorDecision>;
 
+export interface SupervisorContextCache {
+	contractContentByPath: Map<string, string>;
+}
+
 const VALID_CHECKPOINTS = new Set<SupervisorCheckpoint>(["plan_created", "task_end", "validation_end", "final_review"]);
 const VALID_DECISIONS = new Set(["accept", "warn", "request_repair", "request_human"]);
 const MAX_FILE_CHARS = 12_000;
 
-function stripCodeFence(text: string): string {
-	const trimmed = text.trim();
-	const match = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(trimmed);
-	return match ? match[1].trim() : trimmed;
-}
-
-function extractJsonText(text: string): string {
-	const stripped = stripCodeFence(text);
-	const first = stripped.indexOf("{");
-	const last = stripped.lastIndexOf("}");
-	if (first === -1 || last === -1 || last <= first) return stripped;
-	return stripped.slice(first, last + 1);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
+export function createSupervisorContextCache(): SupervisorContextCache {
+	return { contractContentByPath: new Map() };
 }
 
 function asString(value: unknown, label: string): string {
@@ -161,10 +153,6 @@ function readJson(path: string): unknown {
 	}
 }
 
-function sanitizeTaskId(taskId: string): string {
-	return taskId.replace(/[^a-zA-Z0-9._-]/g, "_");
-}
-
 function summarizeTaskResult(result: TaskResult): Omit<TaskResult, "output"> & { outputSummary?: string } {
 	const output = result.output.trim();
 	return {
@@ -197,7 +185,7 @@ function eventSummary(event: TeamEvent): { type: TeamEvent["type"]; taskId?: str
 export function buildSupervisorContext(input: SupervisorContextInput): SupervisorContext {
 	const contracts = input.plan.contracts.map((contract) => ({
 		path: contract.path,
-		content: readText(join(input.outputDir, contract.path)),
+		content: readContract(input.outputDir, contract.path, input.cache),
 	}));
 	const taskIds = new Set<string>();
 	if (input.task?.id) taskIds.add(input.task.id);
@@ -279,12 +267,12 @@ Use request_repair only for actionable implementation fixes and include ownerTas
 Use request_human only when the runtime cannot safely decide.`;
 }
 
-async function extractAssistantText(message: Awaited<ReturnType<typeof completeSimple>>): Promise<string> {
-	return message.content
-		.filter((block) => block.type === "text")
-		.map((block) => block.text)
-		.join("\n")
-		.trim();
+function readContract(outputDir: string, path: string, cache: SupervisorContextCache | undefined): string {
+	const cached = cache?.contractContentByPath.get(path);
+	if (cached !== undefined) return cached;
+	const content = readText(join(outputDir, path));
+	cache?.contractContentByPath.set(path, content);
+	return content;
 }
 
 export async function runSupervisorReview(
@@ -310,7 +298,7 @@ export async function runSupervisorReview(
 	if (message.stopReason === "error" || message.stopReason === "aborted") {
 		throw new Error(message.errorMessage ?? `Supervisor model stopped with ${message.stopReason}`);
 	}
-	const decision = parseSupervisorDecision(await extractAssistantText(message));
+	const decision = parseSupervisorDecision(extractTextContent(message.content));
 	if (decision.checkpoint !== checkpoint) {
 		throw new Error(`Supervisor returned checkpoint ${decision.checkpoint}, expected ${checkpoint}.`);
 	}
