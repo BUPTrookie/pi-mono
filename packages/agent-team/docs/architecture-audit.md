@@ -22,6 +22,7 @@ Config Discovery & Merge (config.ts)
   v
 DynamicTeamRun (team-runner.ts)
   |
+  +-- ExecutionRecorder (execution-recorder.ts) --> events.jsonl + task shards + run-summary.md
   +-- Model Resolution (team-runner.ts:62-108)
   +-- API Key Registration (team-runner.ts:177-179)
   |
@@ -82,24 +83,27 @@ agent-team --> @mariozechner/pi-agent-core (Agent 运行时、工具调用)
 
 **文件:** `packages/agent-team/src/main.ts`, `parseArgs` (line 40)
 
-`parseArgs` 接收 `process.argv.slice(2)`，通过手动 `for` 循环解析以下标志：
+推荐用法：
 
-| 标志 | 目标字段 |
-|---|---|
-| `--requirement <text>` | `result.requirement` |
-| `--output <path>` | `result.outputDir` |
-| `--model <id>` | `result.model.model` |
-| `--provider <name>` | `result.model.provider` |
-| `--api-key <key>` | `result.model.apiKey` |
-| `--base-url <url>` | `result.model.baseUrl` |
-| `--config <path>` | `result.configPath` |
-| `--max-parallel <n>` | `result.options.maxParallelAgents` (parseInt) |
-| `--thinking-level <lvl>` | `result.options.thinkingLevel` |
-| `--max-repair-rounds <n>` | `result.options.maxRepairRounds` (parseInt) |
-| `--intervention-mode <mode>` | `result.options.interventionMode` |
-| `--interactive` | `result.interactive = true` |
+```bash
+node dist/main.js "你的需求描述"
+node dist/main.js "需求描述" --interactive   # 启动 TUI 交互视图
+```
 
-解析后，`main()` 验证 `--requirement` 和 `--output` 必须存在，缺失则退出码 1。
+需求作为位置参数传入，其余配置（model、apiKey、并行度等）在 `agent-team.json` 中管理。CLI 标志仅用于一次性覆盖。
+
+`parseArgs` 支持的标志：
+
+| 标志 | 目标字段 | 说明 |
+|---|---|---|
+| `[requirement]` (位置参数) | `result.requirement` | 需求描述，也可用 `--requirement` |
+| `--interactive` | `result.interactive = true` | 启动 TUI 交互视图 |
+| `--output <path>` | `result.outputDir` | 覆盖配置文件的 outputDir |
+| `--config <path>` | `result.configPath` | 指定配置文件路径 |
+| `--model`, `--provider`, `--api-key`, `--base-url` | `result.model.*` | 一次性覆盖模型配置 |
+| `--max-parallel`, `--thinking-level`, `--max-repair-rounds`, `--intervention-mode` | `result.options.*` | 一次性覆盖运行参数 |
+
+配置优先级：CLI 参数 > 配置文件 > 硬编码默认值。
 
 ### 2.2 配置文件发现与合并
 
@@ -378,7 +382,7 @@ run_end (always final)
 
 ## 6. 测试覆盖
 
-### 6.1 已覆盖模块（7 个测试文件）
+### 6.1 已覆盖模块（11 个测试文件）
 
 | 测试文件 | 被测模块 | 覆盖范围 |
 |----------|---------|---------|
@@ -388,19 +392,21 @@ run_end (always final)
 | `file-ownership.test.ts` | `file-ownership.ts` | 归属目录内外路径、精确匹配、嵌套路径 |
 | `planner.test.ts` | `planner.ts` | 合约写入、依赖图、畸形 JSON 修复、循环依赖检测 |
 | `team-lead.test.ts` | `team-lead.ts` | 完整编排事件序列、规划失败处理 |
+| `team-runner.test.ts` | `team-runner.ts` | 事件持久化、按任务分片、成功/失败 summary、mock runner 注入 |
+| `execution-recorder.test.ts` | `execution-recorder.ts` | 事件写入、任务分片、敏感字段脱敏、summary 生成 |
+| `team-tui.test.ts` | `team-tui.ts` | TUI 组件事件处理、任务表渲染、状态更新、宽度截断 |
 | `validator.test.ts` | `validator.ts` | 缺失输出、OpenAPI 路径、运行时检查 |
+| `role-profiles.test.ts` | `roles/role-registry.ts` | 预设角色 profile 注册表 |
 
 ### 6.2 未覆盖模块
 
 | 模块 | 风险 |
 |------|------|
-| `team-runner.ts` | **高** — 系统主入口，模型解析、暂停/恢复、审批流未测 |
 | `team-agent.ts` | **高** — Agent 构造器，轮次强制、上下文压缩未测 |
 | `tool-pool.ts` | **中** — 工具池是每个 Agent 的单点故障 |
 | `config.ts` | **中** — 配置加载和合并逻辑 |
 | `system-prompts.ts` | **中** — 系统提示模板 |
 | `logger.ts` | **低** |
-| `team-tui.ts` | **低** |
 
 ---
 

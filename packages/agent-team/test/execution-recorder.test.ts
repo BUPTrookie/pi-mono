@@ -102,7 +102,7 @@ describe("execution recorder", () => {
 		]);
 		expect(taskLog.map((entry) => entry.seq)).toEqual([2, 3, 4]);
 		expect(JSON.stringify(mainLog)).not.toContain("secret-key");
-		expect(JSON.stringify(mainLog)).not.toContain("secret content");
+		expect(JSON.stringify(mainLog)).toContain("secret content");
 		expect(summary).toContain("# Agent Team Run Summary");
 		expect(summary).toContain("| build/api | success | 2 | src/index.ts |  |");
 	});
@@ -114,5 +114,78 @@ describe("execution recorder", () => {
 		recorder.record({ type: "run_start", requirement: "Build", outputDir, timestamp: 1 });
 
 		expect(existsSync(join(outputDir, "docs", "agent-team", "events.jsonl"))).toBe(true);
+	});
+
+	it("skips streaming delta events (message_update, tool_execution_update)", () => {
+		const outputDir = tempProject();
+		const recorder = createExecutionRecorder(outputDir);
+
+		const dummyMsg = { role: "assistant" as const, content: "ok", timestamp: 1 };
+		const dummyToolResult = {
+			toolCallId: "t1",
+			toolName: "read" as const,
+			role: "toolResult" as const,
+			content: [{ type: "text" as const, text: "ok" }],
+			isError: false,
+			timestamp: 1,
+			result: {},
+		};
+
+		recorder.record({ type: "run_start", requirement: "Test", outputDir, timestamp: 1 });
+
+		// message_update — streaming delta, should be skipped
+		recorder.record({
+			type: "agent_event",
+			taskId: "test",
+			role: "tester",
+			event: {
+				type: "message_update",
+				message: dummyMsg as never,
+				assistantMessageEvent: {
+					type: "text_delta",
+					contentIndex: 0,
+					delta: "hello",
+					partial: dummyMsg as never,
+				},
+			},
+			timestamp: 2,
+		});
+
+		// tool_execution_update — streaming delta, should be skipped
+		recorder.record({
+			type: "agent_event",
+			taskId: "test",
+			role: "tester",
+			event: {
+				type: "tool_execution_update",
+				toolCallId: "t1",
+				toolName: "bash",
+				args: { command: "ls" },
+				partialResult: {} as never,
+			},
+			timestamp: 3,
+		});
+
+		// turn_end — meaningful event, should be recorded
+		recorder.record({
+			type: "agent_event",
+			taskId: "test",
+			role: "tester",
+			event: {
+				type: "turn_end",
+				message: dummyMsg as never,
+				toolResults: [dummyToolResult],
+			},
+			timestamp: 4,
+		});
+
+		const log = readJsonl(join(outputDir, "docs", "agent-team", "events.jsonl"));
+		// Only run_start and turn_end should be recorded; 2 streaming deltas skipped
+		expect(log.map((e) => e.seq)).toEqual([1, 2]);
+		expect(log.map((e) => e.type)).toEqual(["run_start", "agent_event"]);
+		const recordedInner = log
+			.filter((e) => e.type === "agent_event")
+			.map((e) => (e.event as Record<string, unknown>).event as Record<string, unknown>);
+		expect(recordedInner.map((e) => e.type)).toEqual(["turn_end"]);
 	});
 });

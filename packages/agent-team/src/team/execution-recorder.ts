@@ -15,11 +15,26 @@ export interface ExecutionRecorder {
 	finish(result: TeamResult): void;
 }
 
+/** Keys whose values should always be redacted (API keys, tokens, etc.) */
 const SENSITIVE_KEY_PARTS = ["key", "token", "secret", "authorization", "password"];
-const LARGE_TEXT_KEYS = ["content", "prompt", "systemPrompt", "messages"];
+
+/** Streaming delta event types — noisy intermediate chunks, not useful for replay */
+const STREAMING_DELTA_TYPES = new Set([
+	"message_update",
+	"thinking_delta",
+	"text_delta",
+	"toolcall_delta",
+	"tool_execution_update",
+]);
 
 function sanitizeTaskId(taskId: string): string {
 	return taskId.replace(/[^a-zA-Z0-9._-]/g, "_");
+}
+
+function isStreamingDelta(event: TeamEvent): boolean {
+	if (event.type !== "agent_event") return false;
+	const inner = (event as { event?: { type?: string } }).event;
+	return typeof inner?.type === "string" && STREAMING_DELTA_TYPES.has(inner.type);
 }
 
 function taskIdForEvent(event: TeamEvent): string | undefined {
@@ -38,7 +53,7 @@ function taskIdForEvent(event: TeamEvent): string | undefined {
 
 function shouldRedactKey(key: string): boolean {
 	const normalized = key.toLowerCase();
-	return SENSITIVE_KEY_PARTS.some((part) => normalized.includes(part)) || LARGE_TEXT_KEYS.includes(key);
+	return SENSITIVE_KEY_PARTS.some((part) => normalized.includes(part));
 }
 
 function redactValue(value: unknown, key = ""): unknown {
@@ -116,6 +131,9 @@ export function createExecutionRecorder(outputDir: string): ExecutionRecorder {
 
 	return {
 		record(event: TeamEvent): void {
+			// Skip streaming delta events — redundant with message_start/message_end
+			if (isStreamingDelta(event)) return;
+
 			const safeEvent = redactEvent(event);
 			const envelope: RecordedTeamEvent = {
 				seq: ++seq,

@@ -52,7 +52,7 @@
   v
 +---------------------------------------------------------------------+
 | Step 1: main.ts  CLI 参数解析                                        |
-|   node dist/main.js --requirement "Build a poll API..." --output ./ |
+|   node dist/main.js "Build a poll API..."                            |
 +----------------------------------+----------------------------------+
                                    |
   v
@@ -64,7 +64,7 @@
   v
 +---------------------------------------------------------------------+
 | Step 3: team-runner.ts  创建 DynamicTeamRun                          |
-|   创建项目目录 -> 注册API Key -> 解析模型 -> 创建 TeamLead             |
+|   创建项目目录 -> 初始化Recorder -> 注册API Key -> 解析模型 -> 创建 TeamLead |
 +----------------------------------+----------------------------------+
                                    |
   v
@@ -129,44 +129,35 @@
 用户在终端执行：
 
 ```bash
-node packages/agent-team/dist/main.js \
-  --requirement "Build a RESTful polling API with Express and SQLite. It should support creating polls, voting, and getting results. Include tests." \
-  --output ./output \
-  --model glm-5.1 \
-  --provider zai \
-  --api-key sk-xxx \
-  --max-parallel 2
+cd packages/agent-team
+node dist/main.js "Build a RESTful polling API with Express and SQLite. It should support creating polls, voting, and getting results. Include tests."
 ```
+
+需求作为位置参数直接传入。模型、API Key、并行度等配置在 `agent-team.json` 中管理：
+
+```json
+// agent-team.json（项目目录或 ~/.pi/ 下）
+{
+  "outputDir": "./output",
+  "model": { "provider": "openai", "model": "gpt-4o", "apiKey": "sk-xxx" },
+  "maxParallelAgents": 2
+}
+```
+
+如需终端交互视图（暂停/审批），加 `--interactive` 标志。
 
 **`parseArgs(process.argv.slice(2))`** 解析结果：
 
 ```typescript
 parsed = {
-  requirement: "Build a RESTful polling API with Express and SQLite. It should support creating polls, voting, and getting results. Include tests.",
-  outputDir: "./output",
-  model: {
-    provider: "zai",
-    model: "glm-5.1",
-    apiKey: "sk-xxx",
-    // baseUrl: undefined
-  },
-  options: {
-    maxParallelAgents: 2,  // parseInt("2")
-    // thinkingLevel: undefined
-    // maxRepairRounds: undefined
-    // interventionMode: undefined
-  },
-  // interactive: undefined
+  requirement: "Build a RESTful polling API with Express and SQLite...",
+  // 其他字段全部为 undefined，从配置文件读取
 }
 ```
 
 > **代码位置**：`main.ts:40-87`
 >
-> `parseArgs` 用一个 `for` 循环逐个消费 `argv`。每遇到 `--xxx` 就读下一个元素作为值。注意 `parseInt` 没有 NaN 检查（已知的 L-1 缺陷）。
-
-`main()` 函数做两件事：
-1. 校验 `--requirement` 和 `--output` 必须存在（`main.ts:125-135`），缺失直接 `process.exit(1)`
-2. 因为 `parsed.interactive` 是 `undefined`，走 `await runTeam(config)` 分支（`main.ts:156`）
+> `parseArgs` 用一个 `for` 循环逐个消费 `argv`。需求文本可以作为 `--requirement` 参数或直接作为位置参数传入。所有其他配置（model、apiKey、并行度等）优先从 CLI 参数读取，未设置时回退到配置文件，最后用硬编码默认值。
 
 ---
 
@@ -174,29 +165,36 @@ parsed = {
 
 **`findConfigFile(undefined)`** — 没有传 `--config`，按以下顺序搜索：
 
-| 顺序 | 路径 | 结果 |
+| 顺序 | 路径 | 说明 |
 |------|------|------|
-| 1 | `${cwd}/agent-team.json` | 假设不存在，跳过 |
-| 2 | `${homedir()}/.pi/agent-team.json` | 假设不存在，返回 `undefined` |
+| 1 | `${cwd}/agent-team.json` | 项目目录下的配置文件 |
+| 2 | `${homedir()}/.pi/agent-team.json` | 全局配置 |
 
-**`mergeConfig(undefined, cliModel, cliOptions)`** — 因为文件配置为 `undefined`，CLI 参数直接生效，未设置的字段用硬编码默认值：
+假设在 `${cwd}/agent-team.json` 找到：
+
+```json
+{
+  "outputDir": "./output",
+  "model": { "provider": "openai", "model": "gpt-4o", "apiKey": "sk-xxx" },
+  "maxParallelAgents": 2
+}
+```
+
+**`mergeConfig(fileConfig, undefined, undefined)`** — 因为 CLI 未传任何覆盖参数，直接使用文件配置：
 
 ```typescript
 merged = {
   model: {
-    provider: "zai",              // 来自 CLI --provider
-    model: "glm-5.1",             // 来自 CLI --model
-    apiKey: "sk-xxx",             // 来自 CLI --api-key
-    baseUrl: undefined,           // 未传
+    provider: "openai",         // 来自配置文件
+    model: "gpt-4o",            // 来自配置文件
+    apiKey: "sk-xxx",           // 来自配置文件
   },
-  maxParallelAgents: 2,           // 来自 CLI --max-parallel
-  thinkingLevel: undefined,       // 未传，最终用 "off"
-  maxRepairRounds: undefined,     // 未传，最终用默认 2
-  interventionMode: undefined,    // 未传，最终用 "none"
+  maxParallelAgents: 2,         // 来自配置文件
+  thinkingLevel: undefined,     // 未设置，最终用 "off"
+  maxRepairRounds: undefined,   // 未设置，最终用默认 2
+  interventionMode: undefined,  // 未设置，最终用 "none"
 }
 ```
-
-> 注意 `config.ts:78` 中的硬编码默认模型 `"claude-sonnet-4-6"` — 因为 CLI 已提供 `model`，这里不生效。
 
 最终组装的 `TeamConfig` 对象（`main.ts:141-149`）：
 
@@ -204,11 +202,7 @@ merged = {
 config: TeamConfig = {
   requirement: "Build a RESTful polling API...",
   outputDir: "D:\\code\\...\\output",    // resolve("./output") 变为绝对路径
-  model: {
-    provider: "zai",
-    model: "glm-5.1",
-    apiKey: "sk-xxx",
-  },
+  model: { provider: "openai", model: "gpt-4o", apiKey: "sk-xxx" },
   maxParallelAgents: 2,
   maxRepairRounds: undefined,             // 后面由 team-lead 用 ?? 2 补全
   interventionMode: undefined,            // 后面由 team-lead 用 ?? "none" 补全
@@ -220,14 +214,14 @@ config: TeamConfig = {
 
 ### Step 3：创建 DynamicTeamRun — team-runner.ts
 
-`runTeam(config)` 一行代码（`team-runner.ts:248`）：
+`runTeam(config)` 一行代码（`team-runner.ts:303`）：
 
 ```typescript
 return createTeamRun(config).start();
-// 即 return new DynamicTeamRun(config).start();
+// 即 return new DynamicTeamRun(config, {}).start();
 ```
 
-**`DynamicTeamRun.start()`** 内部依次做了 5 件事：
+**`DynamicTeamRun.start()`** 内部依次做了 6 件事：
 
 #### 3a. 创建项目目录
 
@@ -251,7 +245,18 @@ const projectDir = uniqueDir(baseDir, deriveProjectSlug(requirement));
 
 最终项目目录：**`D:\code\...\output\restful-polling-api-express`**
 
-#### 3b. 注册 API Key
+#### 3b. 初始化执行记录器
+
+```typescript
+// team-runner.ts:202
+this.recorder = createExecutionRecorder(projectConfig.outputDir);
+// 创建 docs/agent-team/tasks/ 目录
+// 后续所有 TeamEvent 通过 emit() 自动写入 events.jsonl 和按任务分片
+```
+
+记录器在 `emit()` 中自动写入事件（`team-runner.ts:219`），在 `finally` 中写入 `run-summary.md`（`team-runner.ts:207`）。敏感字段（apiKey/token/secret/content）自动脱敏为 `[redacted]`。
+
+#### 3c. 注册 API Key
 
 ```typescript
 // team-runner.ts:175-179
@@ -264,7 +269,7 @@ if ("sk-xxx" && "zai") {
 
 把 API Key 注册到 `AuthStorage`，后续 `ModelRegistry` 可以查到。
 
-#### 3c. 创建模型注册表并解析模型
+#### 3c. 创建模型注册表并解析模型（原 3c → 现 3d）
 
 ```typescript
 // team-runner.ts:180-186
@@ -293,7 +298,7 @@ const model = resolveModel(modelRegistry, "zai", "glm-5.1", undefined);
 - Provider 模板回退：用该 provider 的第一个模型作为模板，替换 id
 - 无 provider 全局搜索：遍历所有 provider 的所有模型
 
-#### 3d. 定义 getApiKey 回调
+#### 3d. 定义 getApiKey 回调（原 3d → 现 3e）
 
 ```typescript
 // team-runner.ts:193-201
@@ -308,7 +313,7 @@ const getApiKey = async (provider: string) => {
 
 这个回调会传给 TeamLead，再传给每个 Agent，确保所有 LLM 调用都有 API Key。
 
-#### 3e. 创建 TeamLead
+#### 3e. 创建 TeamLead（原 3e → 现 3f）
 
 ```typescript
 // team-runner.ts:204-208
@@ -1440,6 +1445,14 @@ D:\code\...\output\restful-polling-api-express\
       team-plan.json              <- Step 5e: Planner 写入
       project-manifest.json       <- Step 5e: Planner 写入
       openapi.json                <- Step 5e: Planner 写入
+    agent-team/                   <- ExecutionRecorder 写入
+      events.jsonl                <- 全局事件流（所有 TeamEvent，含 seq/timestamp/type）
+      tasks/
+        task-setup.jsonl          <- task-setup 相关事件的分片
+        task-db.jsonl             <- task-db 相关事件的分片
+        task-api.jsonl            <- task-api 相关事件的分片
+        task-test.jsonl           <- task-test 相关事件的分片
+      run-summary.md              <- 运行摘要（成功/失败、任务列表、验证问题）
   package.json                    <- Agent 1 (setup-engineer) 写入
   src/
     index.js                      <- Agent 1 (setup-engineer) 写入

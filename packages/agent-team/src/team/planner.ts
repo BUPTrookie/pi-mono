@@ -342,6 +342,7 @@ ${formatRoleProfilesForPlanner()}
 - Include dataModel only if the project needs persistent or structured domain data.
 - Do not invent generic placeholder APIs or domain objects.
 - All paths must be relative to the project root. Never use absolute paths or ..
+- ownedDirectories must cover every path in expectedOutputs. If a task must produce root-level files (package.json, .gitignore, tsconfig.json, etc.), its role's ownedDirectories must include "." so the agent can write to the project root. Match ownedDirectories to the actual directories the task writes to — do not blindly use ["src"].
 - Every task role must exist in teamPlan.roles.
 - Every task dependency must reference an existing task id.
 - Contract files are communication artifacts for workers; make them specific enough to prevent drift.`;

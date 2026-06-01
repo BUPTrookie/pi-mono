@@ -14,12 +14,19 @@ interface TaskViewState {
 	id: string;
 	role: string;
 	profile?: string;
-	status: string;
+	status: "pending" | "running" | "completed" | "failed";
 	dependencies: string[];
 	turns?: number;
 	files: string[];
 	error?: string;
 	lastMessage?: string;
+}
+
+interface TaskStats {
+	completed: number;
+	running: number;
+	failed: number;
+	pending: number;
 }
 
 export class TeamRunComponent implements Component {
@@ -28,6 +35,8 @@ export class TeamRunComponent implements Component {
 	private paused = false;
 	private runStatus = "pending";
 	private outputDir?: string;
+	private startTimestamp?: number;
+	private lastTimestamp?: number;
 	private validationRound = 0;
 	private validationIssueCount = 0;
 	private tasks = new Map<string, TaskViewState>();
@@ -64,10 +73,12 @@ export class TeamRunComponent implements Component {
 	}
 
 	push(event: TeamEvent): void {
+		this.lastTimestamp = event.timestamp;
 		switch (event.type) {
 			case "run_start":
 				this.runStatus = "running";
 				this.outputDir = event.outputDir;
+				this.startTimestamp = event.timestamp;
 				this.logs.push(`run started: ${event.requirement}`);
 				break;
 			case "plan_created":
@@ -88,7 +99,7 @@ export class TeamRunComponent implements Component {
 			case "task_start":
 				this.upsertTask(event.task.id, {
 					role: event.task.role,
-					status: event.task.status,
+					status: "running",
 					dependencies: event.task.dependencies,
 				});
 				this.logs.push(`task started: ${event.task.id} (${event.task.role})`);
@@ -117,6 +128,9 @@ export class TeamRunComponent implements Component {
 				this.validationRound = event.round;
 				this.validationIssueCount = event.issues.length;
 				this.logs.push(`validation round ${event.round}: ${event.issues.length} issue(s)`);
+				for (const issue of event.issues.slice(0, 3)) {
+					this.logs.push(`${issue.severity}: ${issue.message}`);
+				}
 				break;
 			case "repair_requested":
 				this.logs.push(`repair round ${event.round}: ${event.tasks.length} task(s)`);
@@ -147,6 +161,8 @@ export class TeamRunComponent implements Component {
 				this.logs.push(`run ended: ${event.result.success ? "success" : "failed"}`);
 				break;
 			case "agent_event":
+				// Skip LLM streaming delta events (noisy per-token events)
+				if (event.event.type === "message_update") break;
 				this.logs.push(`agent event: ${event.taskId}: ${event.event.type}`);
 				break;
 			case "plan_updated":
@@ -159,40 +175,108 @@ export class TeamRunComponent implements Component {
 	invalidate(): void {}
 
 	render(width: number): string[] {
-		const help = this.pendingApproval
-			? "a approve | r reject | p pause/resume | ctrl+c abort"
-			: "p pause/resume | ctrl+c abort";
-		const status = this.paused ? chalk.yellow("paused") : chalk.green(this.runStatus);
+		return [
+			...this.renderHeader(),
+			...this.renderProgressSummary(),
+			...this.renderTaskTable(),
+			...this.renderRecentLogs(),
+			...this.renderFooter(),
+		].map((line) => truncateToWidth(line, width));
+	}
+
+	private renderHeader(): string[] {
 		const model = this.options.modelLabel ?? "unknown";
 		const parallel = this.options.maxParallelAgents ?? 2;
-		const lines = [
+		return [
 			chalk.bold("agent-team dynamic run"),
-			`${status} | model: ${model} | parallel: ${parallel} | validation round: ${this.validationRound}`,
-			`output: ${this.outputDir ?? "pending"} | validation issues: ${this.validationIssueCount}`,
-			chalk.dim(help),
+			`${this.colorStatus(`status: ${this.runStatus}`)} | elapsed: ${this.formatElapsed()} | model: ${model} | parallel: ${parallel}`,
+			`output: ${this.outputDir ?? "pending"}`,
 		];
-		if (this.pendingApproval) lines.push(chalk.yellow(`approval pending: ${this.pendingApproval}`));
+	}
 
-		lines.push("", chalk.bold("tasks"), "seq | task | role | status | deps | turns | files/error");
+	private renderProgressSummary(): string[] {
+		const stats = this.taskStats();
+		const active = this.activeTasks().join(", ") || "-";
+		const approval = this.pendingApproval ? `approval pending: ${this.pendingApproval}` : "approval pending: -";
+		return [
+			"",
+			chalk.bold("progress"),
+			`completed: ${stats.completed} | running: ${stats.running} | failed: ${stats.failed} | pending: ${stats.pending}`,
+			`active: ${active} | validation round: ${this.validationRound} | issues: ${this.validationIssueCount} | ${approval}`,
+		];
+	}
+
+	private renderTaskTable(): string[] {
+		const lines = ["", chalk.bold("tasks"), "seq | task | role/profile | status | deps | turns | files | last"];
 		const taskRows = [...this.tasks.values()].sort((left, right) => left.order - right.order);
 		if (taskRows.length === 0) {
 			lines.push("_no tasks yet_");
-		} else {
-			for (const task of taskRows) {
-				const role = task.profile ? `${task.role}/${task.profile}` : task.role;
-				const deps = task.dependencies.length > 0 ? task.dependencies.join(",") : "-";
-				const files = task.files.length > 0 ? task.files.join(",") : (task.error ?? task.lastMessage ?? "");
-				lines.push(
-					`${task.order} | ${task.id} | ${role} | ${task.status} | ${deps} | ${task.turns ?? 0} | ${files}`,
-				);
-			}
+			return lines;
 		}
 
-		lines.push("", chalk.bold("recent logs"));
-		for (const event of this.logs.slice(-Math.max(3, 10))) {
+		for (const task of taskRows) {
+			const role = task.profile ? `${task.role}/${task.profile}` : task.role;
+			const deps = task.dependencies.length > 0 ? task.dependencies.join(",") : "-";
+			const turns = task.turns ?? 0;
+			const last = task.error ?? task.lastMessage ?? "-";
+			lines.push(
+				`${task.order} | ${task.id} | ${role} | ${this.colorStatus(task.status)} | ${deps} | turns: ${turns} | files: ${task.files.length} | ${last}`,
+			);
+		}
+		return lines;
+	}
+
+	private renderRecentLogs(): string[] {
+		const lines = ["", chalk.bold("recent logs")];
+		const recentLogs = this.logs.slice(-10);
+		if (recentLogs.length === 0) {
+			lines.push("- _no events yet_");
+			return lines;
+		}
+		for (const event of recentLogs) {
 			lines.push(`- ${event}`);
 		}
-		return lines.map((line) => truncateToWidth(line, width));
+		return lines;
+	}
+
+	private renderFooter(): string[] {
+		const help = this.pendingApproval
+			? "keys: p pause/resume | a approve | r reject | ctrl+c abort"
+			: "keys: p pause/resume | ctrl+c abort";
+		return ["", chalk.dim(help)];
+	}
+
+	private taskStats(): TaskStats {
+		const stats: TaskStats = { completed: 0, running: 0, failed: 0, pending: 0 };
+		for (const task of this.tasks.values()) {
+			stats[task.status]++;
+		}
+		return stats;
+	}
+
+	private activeTasks(): string[] {
+		return [...this.tasks.values()]
+			.filter((task) => task.status === "running")
+			.sort((left, right) => left.order - right.order)
+			.map((task) => task.id);
+	}
+
+	private formatElapsed(): string {
+		if (this.startTimestamp === undefined) return "0s";
+		const endTimestamp = this.lastTimestamp ?? this.startTimestamp;
+		const elapsedSeconds = Math.max(0, Math.floor((endTimestamp - this.startTimestamp) / 1000));
+		const minutes = Math.floor(elapsedSeconds / 60);
+		const seconds = elapsedSeconds % 60;
+		if (minutes === 0) return `${seconds}s`;
+		return `${minutes}m ${seconds}s`;
+	}
+
+	private colorStatus(status: string): string {
+		if (status.includes("failed")) return chalk.red(status);
+		if (status.includes("success") || status.includes("completed")) return chalk.green(status);
+		if (status.includes("running")) return chalk.cyan(status);
+		if (status.includes("paused")) return chalk.yellow(status);
+		return chalk.dim(status);
 	}
 
 	private upsertTask(taskId: string, patch: Partial<Omit<TaskViewState, "id" | "order">>): void {
