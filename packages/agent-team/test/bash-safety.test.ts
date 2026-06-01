@@ -19,6 +19,7 @@ describe("bash safety", () => {
 		expect(explainUnsafeBash("npm test")).toBeUndefined();
 		expect(explainUnsafeBash("npm run test:unit")).toBeUndefined();
 		expect(explainUnsafeBash("npm run build")).toBeUndefined();
+		expect(explainUnsafeBash("npm start")).toBeUndefined();
 		expect(explainUnsafeBash("node --check src/index.js")).toBeUndefined();
 	});
 
@@ -32,7 +33,6 @@ describe("bash safety", () => {
 		expect(explainUnsafeBash("pnpm install")).toBeDefined();
 		expect(explainUnsafeBash("docker build .")).toBeDefined();
 		expect(explainUnsafeBash("docker compose up")).toBeDefined();
-		expect(explainUnsafeBash("npm start")).toBeDefined();
 		expect(explainUnsafeBash("npm run dev")).toBeDefined();
 	});
 });
