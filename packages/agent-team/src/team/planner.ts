@@ -464,6 +464,18 @@ export function writeContracts(outputDir: string, result: PlannerResult): void {
 	if (result.contracts.notes) writeJson(outputDir, "docs/contracts/notes.json", result.contracts.notes);
 }
 
+function repairFocusText(task: TaskSpec, issues: ValidationIssue[]): string {
+	const expectedOutputs = task.expectedOutputs.map((output) => `- ${output}`).join("\n");
+	const previousFailures = issues.map((issue) => `- ${issue.id}: ${issue.message}`).join("\n");
+	return [
+		"Previous failure context:",
+		previousFailures,
+		"",
+		"This repair must create or update the expected outputs below. Do not finish with an empty response or zero file changes.",
+		expectedOutputs,
+	].join("\n");
+}
+
 export function createRepairTasks(plan: TeamPlan, issues: ValidationIssue[], round: number): RepairTask[] {
 	const grouped = new Map<string, ValidationIssue[]>();
 	for (const issue of issues.filter((item) => item.severity === "error")) {
@@ -495,7 +507,10 @@ export function createRepairTasks(plan: TeamPlan, issues: ValidationIssue[], rou
 			...originalTask,
 			id: `repair-${round}-${originalTask.id}`,
 			subject: `Repair ${originalTask.subject}`,
-			description: `${originalTask.description}\n\nFix these validation issues:\n${issueText}`,
+			description: `${originalTask.description}\n\nFix these validation issues:\n${issueText}\n\n${repairFocusText(
+				originalTask,
+				ownerIssues,
+			)}`,
 			dependencies: [],
 			repairOf: ownerIssues.map((issue) => issue.id),
 		});

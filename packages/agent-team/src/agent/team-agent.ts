@@ -79,6 +79,39 @@ function isSelfCheckCommand(command: string): boolean {
 	);
 }
 
+export function buildTaskResultFromAgentState(options: {
+	taskId: string;
+	roleName: string;
+	messages: AgentMessage[];
+	events: AgentEvent[];
+	turnsUsed: number;
+	fallbackError?: string;
+}): TaskResult {
+	const output = extractFinalText(options.messages);
+	const filesCreated = extractFilesCreated(options.messages);
+	const checksRun = extractChecksRunFromAgentEvents(options.events);
+	if (!output && filesCreated.length === 0) {
+		return {
+			taskId: options.taskId,
+			success: false,
+			output,
+			filesCreated,
+			error: `Agent ${options.roleName} produced an empty response and changed no files.`,
+			turnsUsed: options.turnsUsed,
+			checksRun,
+		};
+	}
+	return {
+		taskId: options.taskId,
+		success: options.fallbackError === undefined,
+		output,
+		filesCreated,
+		error: options.fallbackError,
+		turnsUsed: options.turnsUsed,
+		checksRun,
+	};
+}
+
 export function extractChecksRunFromAgentEvents(events: AgentEvent[]): TaskCheckResult[] {
 	const commandsById = new Map<string, string>();
 	const checks: TaskCheckResult[] = [];
@@ -236,39 +269,34 @@ export async function runTeamAgent(taskDescription: string, config: TeamAgentCon
 
 	try {
 		await agent.prompt(taskDescription);
-		const text = extractFinalText(agent.state.messages);
-		const filesCreated = extractFilesCreated(agent.state.messages);
-		const result: TaskResult = {
+		const result = buildTaskResultFromAgentState({
 			taskId: config.taskId ?? "",
-			success: true,
-			output: text,
-			filesCreated,
+			roleName: role.name,
+			messages: agent.state.messages,
+			events,
 			turnsUsed,
-			checksRun: extractChecksRunFromAgentEvents(events),
-		};
+		});
 		result.handoffPath = writeTaskHandoff(outputDir, result.taskId || role.name, result);
 		return result;
 	} catch (err) {
 		const parentAborted = parentSignal?.aborted ?? false;
 		const reachedMaxTurns = turnsUsed >= maxTurns;
 		const isAborted = parentAborted || reachedMaxTurns;
-		const text = extractFinalText(agent.state.messages);
-		const filesCreated = extractFilesCreated(agent.state.messages);
-		const result: TaskResult = {
+		const error = isAborted
+			? parentAborted
+				? "Parent aborted"
+				: `Agent reached maximum turns (${maxTurns})`
+			: err instanceof Error
+				? err.message
+				: String(err);
+		const result = buildTaskResultFromAgentState({
 			taskId: config.taskId ?? "",
-			success: !isAborted && !!text,
-			output: text,
-			filesCreated,
-			error: isAborted
-				? parentAborted
-					? "Parent aborted"
-					: `Agent reached maximum turns (${maxTurns})`
-				: err instanceof Error
-					? err.message
-					: String(err),
+			roleName: role.name,
+			messages: agent.state.messages,
+			events,
 			turnsUsed,
-			checksRun: extractChecksRunFromAgentEvents(events),
-		};
+			fallbackError: error,
+		});
 		result.handoffPath = writeTaskHandoff(outputDir, result.taskId || role.name, result);
 		return result;
 	} finally {

@@ -1,6 +1,6 @@
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
 import { describe, expect, it } from "vitest";
-import { extractChecksRunFromAgentEvents } from "../src/agent/team-agent.js";
+import { buildTaskResultFromAgentState, extractChecksRunFromAgentEvents } from "../src/agent/team-agent.js";
 
 describe("team agent helpers", () => {
 	it("extracts self-check commands from bash tool events", () => {
@@ -50,5 +50,44 @@ describe("team agent helpers", () => {
 			{ command: "node --check src/index.js", exitCode: 0, summary: "ok", required: true },
 			{ command: "npm run check", exitCode: 2, summary: "Command exited with code 2", required: true },
 		]);
+	});
+
+	it("marks empty assistant output with no file changes as failed", () => {
+		const result = buildTaskResultFromAgentState({
+			taskId: "backend",
+			roleName: "backend-engineer",
+			messages: [
+				{
+					role: "assistant",
+					content: [],
+					api: "openai-responses",
+					provider: "openai",
+					model: "test-model",
+					usage: {
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 0,
+						cost: {
+							input: 0,
+							output: 0,
+							cacheRead: 0,
+							cacheWrite: 0,
+							total: 0,
+						},
+					},
+					stopReason: "stop",
+					timestamp: 1,
+				},
+			],
+			events: [],
+			turnsUsed: 1,
+			fallbackError: "unused",
+		});
+
+		expect(result.success).toBe(false);
+		expect(result.error).toContain("empty response");
+		expect(result.filesCreated).toEqual([]);
 	});
 });

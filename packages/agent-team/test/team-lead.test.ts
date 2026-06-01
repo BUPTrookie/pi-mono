@@ -587,4 +587,37 @@ describe("TeamLead dynamic run", () => {
 		expect(supervisorEnd?.decision.issues[0]?.id).toContain("supervisor-parse-failed");
 		expect(supervisorEnd?.decision.summary).toContain("parse");
 	});
+
+	it("fails dependent tasks before running them when dependency outputs are missing", async () => {
+		const outputDir = tempProject();
+		mkdirSync(outputDir, { recursive: true });
+		const calledTaskIds: string[] = [];
+		const lead = new TeamLead({
+			config: { ...config(outputDir), maxRepairRounds: 0 },
+			model,
+			getApiKey: () => "key",
+			controls: controls(),
+			agentRunner: async (_description, agentConfig) => {
+				calledTaskIds.push(agentConfig.taskId ?? "");
+				return {
+					taskId: agentConfig.taskId ?? "",
+					success: true,
+					output: "claimed success without files",
+					filesCreated: [],
+					turnsUsed: 1,
+					handoffPath: `docs/agent-team/tasks/${agentConfig.taskId}-handoff.json`,
+				};
+			},
+			plannerRunner: async () => plannerResult(),
+			validatorRunner: async () => [],
+		});
+
+		const result = await lead.orchestrate();
+		const dependent = result.tasks.find((task) => task.taskId === "verify-e2e");
+
+		expect(result.success).toBe(false);
+		expect(calledTaskIds).toEqual(["build-cli"]);
+		expect(dependent?.success).toBe(false);
+		expect(dependent?.error).toContain("Dependency 'build-cli' did not produce expected output");
+	});
 });

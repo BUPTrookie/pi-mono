@@ -283,4 +283,25 @@ describe("LLM planner", () => {
 
 		expect(repairTasks.map((task) => task.id)).toEqual(["repair-1-validate-app"]);
 	});
+
+	it("adds explicit repair focus for empty agent output", () => {
+		const result = parsePlannerOutput(plannerJson("polling"));
+		const repairTasks = createRepairTasks(
+			result.plan,
+			[
+				{
+					id: "task-failed-build-app",
+					severity: "error",
+					message: "Task build-app failed: Agent produced no output and changed no files.",
+					ownerTaskId: "build-app",
+				},
+			],
+			1,
+		);
+
+		expect(repairTasks[0]?.description).toContain("Previous failure context");
+		expect(repairTasks[0]?.description).toContain("Agent produced no output");
+		expect(repairTasks[0]?.description).toContain("This repair must create or update the expected outputs");
+		expect(repairTasks[0]?.description).toContain("src/index.js");
+	});
 });

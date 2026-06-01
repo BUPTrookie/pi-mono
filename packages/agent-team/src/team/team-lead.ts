@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import type { Api, Model } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
 import { runTeamAgent, type TeamAgentConfig } from "../agent/team-agent.js";
@@ -173,6 +175,21 @@ function classifySupervisorFailure(message: string): { id: string; label: string
 		label: "runtime error",
 		action: "Inspect the supervisor runner and context construction path.",
 	};
+}
+
+function missingDependencyOutput(outputDir: string, task: Task, plan: TeamPlan, graph: TaskGraph): string | undefined {
+	for (const dependencyId of task.dependencies) {
+		const dependency = plan.tasks.find((item) => item.id === dependencyId);
+		if (!dependency) continue;
+		const dependencyResult = graph.getTask(dependencyId)?.result;
+		if (!dependencyResult?.handoffPath) continue;
+		for (const expectedOutput of dependency.expectedOutputs) {
+			if (expectedOutput.includes("*") || expectedOutput.includes("?")) continue;
+			if (existsSync(join(outputDir, expectedOutput))) continue;
+			return `Dependency '${dependencyId}' did not produce expected output: ${expectedOutput}`;
+		}
+	}
+	return undefined;
 }
 
 export class TeamLead {
@@ -499,6 +516,21 @@ export class TeamLead {
 				scheduler.startTask(task.id);
 				this.emitEvent({ type: "task_start", task, timestamp: now() });
 				createLogger(task.role).info(`Starting task: ${task.subject}`);
+
+				const dependencyError = missingDependencyOutput(this.config.outputDir, task, plan, graph);
+				if (dependencyError) {
+					return {
+						task,
+						result: {
+							taskId: task.id,
+							success: false,
+							output: "",
+							filesCreated: [],
+							error: dependencyError,
+							turnsUsed: 0,
+						},
+					};
+				}
 
 				const role = roleRegistry.get(task.role);
 				if (!role) throw new Error(`Unknown dynamic role: ${task.role}`);
