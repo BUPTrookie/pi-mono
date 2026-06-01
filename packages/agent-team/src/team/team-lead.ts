@@ -122,15 +122,7 @@ function issuesFromTaskFailures(results: TaskResult[]): ValidationIssue[] {
 
 function issuesFromSupervisorDecision(decision: SupervisorDecision | undefined): ValidationIssue[] {
 	if (!decision) return [];
-	if (decision.decision === "request_human" && decision.issues.length === 0) {
-		return [
-			{
-				id: `supervisor-human-${decision.checkpoint}`,
-				severity: "error",
-				message: decision.summary,
-			},
-		];
-	}
+	if (decision.decision === "request_human") return [];
 	return decision.issues;
 }
 
@@ -315,6 +307,15 @@ export class TeamLead {
 		this.emit(event);
 	}
 
+	private persistSupervisorDecision(decision: SupervisorDecision): void {
+		try {
+			writeSupervisorDecision(this.config.outputDir, ++this.supervisionSequence, decision);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			log.warn(`Failed to persist supervisor decision: ${message}`);
+		}
+	}
+
 	private async supervise(
 		checkpoint: SupervisorCheckpoint,
 		plan: TeamPlan,
@@ -351,7 +352,7 @@ export class TeamLead {
 				getApiKey: this.getApiKey,
 				signal: this.abortController.signal,
 			});
-			writeSupervisorDecision(this.config.outputDir, ++this.supervisionSequence, decision);
+			this.persistSupervisorDecision(decision);
 			this.emitEvent({ type: "supervision_end", checkpoint, decision, timestamp: now() });
 			if (decision.decision === "request_human") {
 				this.emitEvent({
@@ -376,7 +377,7 @@ export class TeamLead {
 				],
 				recommendedActions: ["Continue with deterministic validation."],
 			};
-			writeSupervisorDecision(this.config.outputDir, ++this.supervisionSequence, decision);
+			this.persistSupervisorDecision(decision);
 			this.emitEvent({ type: "supervision_end", checkpoint, decision, timestamp: now() });
 			return decision;
 		}

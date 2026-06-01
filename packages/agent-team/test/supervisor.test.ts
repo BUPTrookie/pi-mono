@@ -1,8 +1,13 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildSupervisorContext, parseSupervisorDecision, type SupervisorCheckpoint } from "../src/team/supervisor.js";
+import {
+	buildSupervisorContext,
+	parseSupervisorDecision,
+	type SupervisorCheckpoint,
+	writeSupervisorDecision,
+} from "../src/team/supervisor.js";
 import type { TeamPlan, ValidationIssue } from "../src/types.js";
 
 function tempProject(): string {
@@ -127,4 +132,65 @@ describe("supervisor", () => {
 		expect(JSON.stringify(context.changedFiles)).toContain("console.log");
 		expect(JSON.stringify(context.validationIssues)).toContain("Minor risk");
 	});
+
+	it("reports truncation when changed files or file content are omitted", () => {
+		const outputDir = tempProject();
+		mkdirSync(join(outputDir, "src"), { recursive: true });
+		const files = Array.from({ length: 13 }, (_item, index) => `src/file-${index}.js`);
+		for (const file of files) {
+			writeFileSync(join(outputDir, file), indexContent(file), "utf-8");
+		}
+		writeFileSync(join(outputDir, "src/file-0.js"), "x".repeat(12_050), "utf-8");
+
+		const context = buildSupervisorContext({
+			checkpoint: "task_end",
+			outputDir,
+			requirement: "Build a CLI",
+			plan: plan(),
+			task: plan().tasks[0],
+			taskResult: {
+				taskId: "build-cli",
+				success: true,
+				output: "ok",
+				filesCreated: files,
+				turnsUsed: 1,
+			},
+			validationIssues: [],
+			recentEvents: [],
+			allTaskResults: [],
+		});
+
+		expect(context.changedFiles).toHaveLength(12);
+		expect(context.truncationWarnings.some((warning) => warning.includes("1 changed file"))).toBe(true);
+		expect(context.truncationWarnings.some((warning) => warning.includes("src/file-0.js"))).toBe(true);
+	});
+
+	it("appends team leader markdown reviews instead of overwriting prior checkpoints", () => {
+		const outputDir = tempProject();
+		const first = {
+			checkpoint: "task_end" as const,
+			decision: "warn" as const,
+			summary: "Task warning",
+			issues: [{ id: "task-risk", severity: "warning" as const, message: "Missing edge case" }],
+			recommendedActions: ["Repair task"],
+		};
+		const second = {
+			checkpoint: "final_review" as const,
+			decision: "accept" as const,
+			summary: "Final ok",
+			issues: [],
+			recommendedActions: [],
+		};
+
+		writeSupervisorDecision(outputDir, 1, first);
+		writeSupervisorDecision(outputDir, 2, second);
+
+		const review = readFileSync(join(outputDir, "docs", "agent-team", "team-leader-review.md"), "utf-8");
+		expect(review).toContain("Task warning");
+		expect(review).toContain("Final ok");
+	});
 });
+
+function indexContent(file: string): string {
+	return `console.log(${JSON.stringify(file)});`;
+}

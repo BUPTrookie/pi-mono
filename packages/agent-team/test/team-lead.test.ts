@@ -454,17 +454,59 @@ describe("TeamLead dynamic run", () => {
 			async () => [],
 			async (checkpoint) => ({
 				checkpoint,
-				decision: checkpoint === "plan_created" ? "request_human" : "accept",
-				summary: checkpoint === "plan_created" ? "Need product clarification" : "ok",
+				decision: checkpoint === "validation_end" ? "request_human" : "accept",
+				summary: checkpoint === "validation_end" ? "Need product clarification" : "ok",
 				issues: [],
 				recommendedActions: [],
 			}),
 		);
 
-		await lead.orchestrate();
+		const result = await lead.orchestrate();
 
+		expect(result.success).toBe(true);
+		expect(result.validationIssues?.some((issue) => issue.id.startsWith("supervisor-human"))).toBe(false);
 		expect(
 			events.some((event) => event.type === "intervention" && event.message.includes("Need product clarification")),
 		).toBe(true);
+	});
+
+	it("continues when supervisor decision persistence fails", async () => {
+		const outputDir = tempProject();
+		mkdirSync(outputDir, { recursive: true });
+		const events: TeamEvent[] = [];
+		const runner: TeamAgentRunner = async (_description, agentConfig) => {
+			writeHandoff(agentConfig.outputDir, "build-cli");
+			writeHandoff(agentConfig.outputDir, "verify-e2e");
+			return { taskId: agentConfig.taskId ?? "", success: true, output: "ok", filesCreated: [], turnsUsed: 1 };
+		};
+		const planner: PlannerRunner = async () => {
+			const result = plannerResult();
+			mkdirSync(join(outputDir, "docs", "agent-team"), { recursive: true });
+			writeFileSync(join(outputDir, "docs", "agent-team", "supervision"), "not a directory", "utf-8");
+			return result;
+		};
+
+		const lead = new TeamLead(
+			{ ...config(outputDir), supervisionMode: "milestone" },
+			model,
+			() => "key",
+			(event) => events.push(event),
+			controls(),
+			runner,
+			planner,
+			async () => [],
+			async (checkpoint) => ({
+				checkpoint,
+				decision: "accept",
+				summary: "ok",
+				issues: [],
+				recommendedActions: [],
+			}),
+		);
+
+		const result = await lead.orchestrate();
+
+		expect(result.success).toBe(true);
+		expect(events.some((event) => event.type === "supervision_end")).toBe(true);
 	});
 });

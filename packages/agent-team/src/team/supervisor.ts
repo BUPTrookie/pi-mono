@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Api, Model } from "@mariozechner/pi-ai";
 import { completeSimple } from "@mariozechner/pi-ai";
@@ -36,6 +36,7 @@ export interface SupervisorContext {
 	contracts: Array<{ path: string; content: string }>;
 	handoffs: Array<{ path: string; content: unknown }>;
 	changedFiles: Array<{ path: string; content: string }>;
+	truncationWarnings: string[];
 	validationIssues: ValidationIssue[];
 	recentEvents: Array<{ type: TeamEvent["type"]; taskId?: string; summary: string }>;
 	allTaskResults: Array<Omit<TaskResult, "output"> & { outputSummary?: string }>;
@@ -134,13 +135,20 @@ export function parseSupervisorDecision(text: string): SupervisorDecision {
 	};
 }
 
-function readText(path: string): string {
+function readTextWithMetadata(path: string): { content: string; truncated: boolean } {
 	try {
 		const text = readFileSync(path, "utf-8");
-		return text.length > MAX_FILE_CHARS ? text.slice(0, MAX_FILE_CHARS) : text;
+		return {
+			content: text.length > MAX_FILE_CHARS ? text.slice(0, MAX_FILE_CHARS) : text,
+			truncated: text.length > MAX_FILE_CHARS,
+		};
 	} catch {
-		return "";
+		return { content: "", truncated: false };
 	}
+}
+
+function readText(path: string): string {
+	return readTextWithMetadata(path).content;
 }
 
 function readJson(path: string): unknown {
@@ -213,10 +221,25 @@ export function buildSupervisorContext(input: SupervisorContextInput): Superviso
 		}
 	}
 
-	const changedFiles = [...filePaths].slice(0, 12).map((path) => ({
-		path,
-		content: readText(join(input.outputDir, path)),
-	}));
+	const truncationWarnings: string[] = [];
+	const allFilePaths = [...filePaths];
+	if (allFilePaths.length > 12) {
+		truncationWarnings.push(
+			`${allFilePaths.length - 12} changed file(s) omitted from supervisor context: ${allFilePaths
+				.slice(12)
+				.join(", ")}`,
+		);
+	}
+	const changedFiles = allFilePaths.slice(0, 12).map((path) => {
+		const file = readTextWithMetadata(join(input.outputDir, path));
+		if (file.truncated) {
+			truncationWarnings.push(`File ${path} was truncated to ${MAX_FILE_CHARS} characters.`);
+		}
+		return {
+			path,
+			content: file.content,
+		};
+	});
 
 	return {
 		checkpoint: input.checkpoint,
@@ -227,6 +250,7 @@ export function buildSupervisorContext(input: SupervisorContextInput): Superviso
 		contracts,
 		handoffs,
 		changedFiles,
+		truncationWarnings,
 		validationIssues: input.validationIssues,
 		recentEvents: input.recentEvents.slice(-40).map(eventSummary),
 		allTaskResults: input.allTaskResults.map(summarizeTaskResult),
@@ -238,6 +262,7 @@ function supervisorPrompt(context: SupervisorContext): string {
 
 You do not implement code. You review the run using facts from contracts, files, handoffs, checks, events, and validator issues.
 Do not trust worker prose alone. Prefer concrete changed files, handoff JSON, checksRun, expected outputs, and validation issues.
+If truncationWarnings is non-empty, account for the missing or partial facts in your confidence and request human input when that prevents a safe judgment.
 
 Return ONLY valid JSON:
 {
@@ -299,21 +324,22 @@ export function writeSupervisorDecision(outputDir: string, sequence: number, dec
 	mkdirSync(dirname(jsonPath), { recursive: true });
 	writeFileSync(jsonPath, `${JSON.stringify(decision, null, 2)}\n`, "utf-8");
 	mkdirSync(dirname(reviewPath), { recursive: true });
-	writeFileSync(
+	if (sequence === 1 || !existsSync(reviewPath)) {
+		writeFileSync(reviewPath, "# TeamLeader Supervisor Review\n\n", "utf-8");
+	}
+	appendFileSync(
 		reviewPath,
 		[
-			"# TeamLeader Supervisor Review",
-			"",
-			`Latest checkpoint: ${decision.checkpoint}`,
+			`## ${String(sequence).padStart(3, "0")} ${decision.checkpoint}`,
 			`Decision: ${decision.decision}`,
 			`Summary: ${decision.summary}`,
 			"",
-			"## Issues",
+			"### Issues",
 			decision.issues.length === 0
 				? "None"
 				: decision.issues.map((issue) => `- ${issue.id}: ${issue.severity}: ${issue.message}`).join("\n"),
 			"",
-			"## Recommended Actions",
+			"### Recommended Actions",
 			decision.recommendedActions.length === 0
 				? "None"
 				: decision.recommendedActions.map((action) => `- ${action}`).join("\n"),
