@@ -83,6 +83,7 @@ Self-check before finishing:
 - Frontend tasks should run npm run check, npm test, or npm run build when those scripts exist.
 - If a check fails, fix the issue and rerun the check before finalizing.
 - Do not run dependency installation or long-lived service commands; the Lead runs controlled install and whole-project validation.
+- Your handoff must include changed files, contracts satisfied, checks run, and known risks. The runtime records it at docs/agent-team/tasks/<taskId>-handoff.json.
 
 Do not rely on prior agent prose summaries. Use the contract files and the actual files in the workspace as source of truth.${interventionText}`;
 }

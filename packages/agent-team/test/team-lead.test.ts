@@ -126,6 +126,21 @@ function controls(): TeamLeadControls {
 	};
 }
 
+function writeHandoff(outputDir: string, taskId: string): void {
+	mkdirSync(join(outputDir, "docs", "agent-team", "tasks"), { recursive: true });
+	writeFileSync(
+		join(outputDir, "docs", "agent-team", "tasks", `${taskId}-handoff.json`),
+		JSON.stringify({
+			taskId,
+			changedFiles: [],
+			contractsSatisfied: ["ok"],
+			checksRun: [{ command: "node --check src/index.js", exitCode: 0, summary: "ok", required: true }],
+			knownRisks: [],
+		}),
+		"utf-8",
+	);
+}
+
 describe("TeamLead dynamic run", () => {
 	it("emits run, plan, validation, repair, and completion events with an injected planner", async () => {
 		const outputDir = tempProject();
@@ -134,6 +149,8 @@ describe("TeamLead dynamic run", () => {
 		const descriptions: string[] = [];
 		const runner: TeamAgentRunner = async (description, agentConfig) => {
 			descriptions.push(description);
+			writeHandoff(agentConfig.outputDir, "build-cli");
+			writeHandoff(agentConfig.outputDir, "verify-e2e");
 			if (agentConfig.taskId?.startsWith("repair-")) {
 				mkdirSync(join(agentConfig.outputDir, "src"), { recursive: true });
 				writeFileSync(join(agentConfig.outputDir, "src/index.js"), "console.log('ok')", "utf-8");
@@ -144,7 +161,18 @@ describe("TeamLead dynamic run", () => {
 				);
 				writeFileSync(join(agentConfig.outputDir, "README.md"), "# Project\n", "utf-8");
 				mkdirSync(join(agentConfig.outputDir, "docs"), { recursive: true });
-				writeFileSync(join(agentConfig.outputDir, "docs/e2e-report.md"), "# E2E\n", "utf-8");
+				writeFileSync(
+					join(agentConfig.outputDir, "docs/e2e-report.md"),
+					[
+						"# E2E",
+						"",
+						"Commands: npm run check",
+						"Exit status: 0",
+						"Observed result: CLI formats JSON.",
+						"Acceptance status: pass",
+					].join("\n"),
+					"utf-8",
+				);
 			}
 			return { taskId: agentConfig.taskId ?? "", success: true, output: "ok", filesCreated: [], turnsUsed: 1 };
 		};

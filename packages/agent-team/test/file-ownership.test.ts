@@ -61,5 +61,25 @@ describe("file-ownership", () => {
 			expect(blockedCompactRedirect?.block).toBe(true);
 			expect(blockedMove?.block).toBe(true);
 		});
+
+		it("detects additional bash write targets in compound commands", async () => {
+			const guard = createOwnershipGuard(["src", "docs/out"], outputDir);
+
+			expect(await guard(toolContext("bash", { command: "cat > src/generated.txt" }))).toBeUndefined();
+			expect(await guard(toolContext("bash", { command: "echo ok | tee src/generated.txt" }))).toBeUndefined();
+			expect(
+				await guard(toolContext("bash", { command: "mkdir -p docs/out && cp src/a.js docs/out/a.js" })),
+			).toBeUndefined();
+
+			const blockedTee = await guard(toolContext("bash", { command: "echo ok | tee README.md" }));
+			const blockedCat = await guard(toolContext("bash", { command: "cat > docs/private.txt" }));
+			const blockedCompound = await guard(
+				toolContext("bash", { command: "mkdir -p docs/out && cp src/a.js README.md" }),
+			);
+
+			expect(blockedTee?.block).toBe(true);
+			expect(blockedCat?.block).toBe(true);
+			expect(blockedCompound?.block).toBe(true);
+		});
 	});
 });

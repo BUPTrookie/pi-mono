@@ -1,8 +1,10 @@
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
 import { Agent, type AgentEvent, type AgentMessage, type StreamFn } from "@mariozechner/pi-agent-core";
 import type { Model } from "@mariozechner/pi-ai";
 import { convertToLlm } from "@mariozechner/pi-coding-agent";
-import type { ApprovalDecision, InterventionMode, RoleDefinition, TaskResult } from "../types.js";
+import type { ApprovalDecision, InterventionMode, RoleDefinition, TaskCheckResult, TaskResult } from "../types.js";
 import { createBashSafetyGuard } from "./bash-safety.js";
 import { createOwnershipGuard } from "./file-ownership.js";
 import { buildToolPool } from "./tool-pool.js";
@@ -61,6 +63,80 @@ function extractFilesCreated(messages: AgentMessage[]): string[] {
 	return [...files];
 }
 
+function sanitizeTaskId(taskId: string): string {
+	return taskId.replace(/[^a-zA-Z0-9._-]/g, "_");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function extractExitCode(result: unknown, isError: boolean): number | null {
+	if (isRecord(result) && typeof result.exitCode === "number") return result.exitCode;
+	const text = typeof result === "string" ? result : JSON.stringify(result ?? "");
+	const match = /Command exited with code\s+(\d+)/i.exec(text);
+	if (match) return Number(match[1]);
+	return isError ? 1 : 0;
+}
+
+function summarizeToolResult(result: unknown): string {
+	const text = typeof result === "string" ? result : JSON.stringify(result ?? "");
+	const normalized = text.replace(/\s+/g, " ").trim();
+	if (!normalized) return "completed";
+	return normalized.length > 240 ? `${normalized.slice(0, 237)}...` : normalized;
+}
+
+function isSelfCheckCommand(command: string): boolean {
+	return /\b(?:node\s+--check|npm\s+(?:run\s+)?(?:check|test|build)|pnpm\s+(?:run\s+)?(?:check|test|build)|yarn\s+(?:run\s+)?(?:check|test|build)|bun\s+(?:run\s+)?(?:check|test|build)|vitest|tsc|eslint)\b/i.test(
+		command,
+	);
+}
+
+export function extractChecksRunFromAgentEvents(events: AgentEvent[]): TaskCheckResult[] {
+	const commandsById = new Map<string, string>();
+	const checks: TaskCheckResult[] = [];
+	for (const event of events) {
+		if (event.type === "tool_execution_start" && event.toolName === "bash") {
+			const args = isRecord(event.args) ? event.args : {};
+			const command = typeof args.command === "string" ? args.command.trim() : "";
+			if (command) commandsById.set(event.toolCallId, command);
+			continue;
+		}
+		if (event.type !== "tool_execution_end" || event.toolName !== "bash") continue;
+		const command = commandsById.get(event.toolCallId);
+		if (!command || !isSelfCheckCommand(command)) continue;
+		checks.push({
+			command,
+			exitCode: extractExitCode(event.result, event.isError),
+			summary: summarizeToolResult(event.result),
+			required: true,
+		});
+	}
+	return checks;
+}
+
+function writeTaskHandoff(outputDir: string, taskId: string, result: TaskResult): string {
+	const relativePath = `docs/agent-team/tasks/${sanitizeTaskId(taskId)}-handoff.json`;
+	const absolutePath = join(outputDir, relativePath);
+	mkdirSync(dirname(absolutePath), { recursive: true });
+	writeFileSync(
+		absolutePath,
+		`${JSON.stringify(
+			{
+				taskId,
+				changedFiles: result.filesCreated,
+				contractsSatisfied: result.success ? ["Task acceptance criteria reviewed by agent."] : [],
+				checksRun: result.checksRun ?? [],
+				knownRisks: result.error ? [result.error] : [],
+			},
+			null,
+			2,
+		)}\n`,
+		"utf-8",
+	);
+	return relativePath;
+}
+
 /**
  * Contract-aware context transform that keeps project contract references and recent messages.
  */
@@ -80,7 +156,12 @@ function createContractAwareTransformContext(
 						.map((block) => block.text)
 						.join("\n")
 				: String(message.content);
-			return text.includes("docs/contracts/") || text.includes("Acceptance criteria:");
+			return (
+				text.includes("docs/contracts/") ||
+				text.includes("Contract files to read first:") ||
+				text.includes("Acceptance criteria:") ||
+				text.includes("Expected outputs:")
+			);
 		});
 		const merged = [systemMsg, ...contractMessages, ...recent];
 		const seen = new Set<AgentMessage>();
@@ -140,7 +221,7 @@ export async function runTeamAgent(taskDescription: string, config: TeamAgentCon
 	if (parentSignal) {
 		if (parentSignal.aborted) {
 			return {
-				taskId: "",
+				taskId: config.taskId ?? "",
 				success: false,
 				output: "",
 				filesCreated: [],
@@ -154,7 +235,9 @@ export async function runTeamAgent(taskDescription: string, config: TeamAgentCon
 
 	// Track turns and enforce maxTurns
 	let turnsUsed = 0;
+	const events: AgentEvent[] = [];
 	const unsubscribe = agent.subscribe((event) => {
+		events.push(event);
 		config.onAgentEvent?.(event);
 		if (event.type === "turn_end") {
 			turnsUsed++;
@@ -168,21 +251,24 @@ export async function runTeamAgent(taskDescription: string, config: TeamAgentCon
 		await agent.prompt(taskDescription);
 		const text = extractFinalText(agent.state.messages);
 		const filesCreated = extractFilesCreated(agent.state.messages);
-		return {
-			taskId: "",
+		const result: TaskResult = {
+			taskId: config.taskId ?? "",
 			success: true,
 			output: text,
 			filesCreated,
 			turnsUsed,
+			checksRun: extractChecksRunFromAgentEvents(events),
 		};
+		result.handoffPath = writeTaskHandoff(outputDir, result.taskId || role.name, result);
+		return result;
 	} catch (err) {
 		const parentAborted = parentSignal?.aborted ?? false;
 		const reachedMaxTurns = turnsUsed >= maxTurns;
 		const isAborted = parentAborted || reachedMaxTurns;
 		const text = extractFinalText(agent.state.messages);
 		const filesCreated = extractFilesCreated(agent.state.messages);
-		return {
-			taskId: "",
+		const result: TaskResult = {
+			taskId: config.taskId ?? "",
 			success: !isAborted && !!text,
 			output: text,
 			filesCreated,
@@ -194,7 +280,10 @@ export async function runTeamAgent(taskDescription: string, config: TeamAgentCon
 					? err.message
 					: String(err),
 			turnsUsed,
+			checksRun: extractChecksRunFromAgentEvents(events),
 		};
+		result.handoffPath = writeTaskHandoff(outputDir, result.taskId || role.name, result);
+		return result;
 	} finally {
 		unsubscribe();
 		if (parentSignal && onParentAbort) {

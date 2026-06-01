@@ -26,10 +26,12 @@ const result: TeamResult = {
 			output: "built",
 			filesCreated: ["src/index.ts"],
 			turnsUsed: 2,
+			checksRun: [{ command: "node --check src/index.ts", exitCode: 0, summary: "ok", required: true }],
+			handoffPath: "docs/agent-team/tasks/build_api-handoff.json",
 		},
 	],
 	totalTurns: 2,
-	validationIssues: [],
+	validationIssues: [{ id: "warn-1", severity: "warning", message: "minor risk", ownerTaskId: "build/api" }],
 };
 
 describe("execution recorder", () => {
@@ -104,7 +106,11 @@ describe("execution recorder", () => {
 		expect(JSON.stringify(mainLog)).not.toContain("secret-key");
 		expect(JSON.stringify(mainLog)).toContain("secret content");
 		expect(summary).toContain("# Agent Team Run Summary");
-		expect(summary).toContain("| build/api | success | 2 | src/index.ts |  |");
+		expect(summary).toContain(
+			"| build/api | success | 2 | src/index.ts | 1 | docs/agent-team/tasks/build_api-handoff.json |  |",
+		);
+		expect(summary).toContain("node --check src/index.ts");
+		expect(summary).toContain("warn-1");
 	});
 
 	it("creates the log directory before recording", () => {

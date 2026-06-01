@@ -14,6 +14,8 @@ export interface BashSafetyOptions {
 }
 
 const DANGEROUS_PATTERNS = [
+	/\$\(|`/,
+	/(?:^|[^&])&(?!&)/,
 	/\brm\s+/i,
 	/\b(?:del|erase|rmdir)\s+.*(?:\/s|\/q|-[a-z]*[rf][a-z]*)/i,
 	/\b(?:npm|pnpm|yarn|bun)\s+(?:install|add|remove|run\s+(?:dev|start))\b/i,

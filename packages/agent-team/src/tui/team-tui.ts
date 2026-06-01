@@ -31,7 +31,7 @@ interface TaskStats {
 
 export class TeamRunComponent implements Component {
 	private logs: string[] = [];
-	private pendingApproval?: string;
+	private approvalQueue: string[] = [];
 	private paused = false;
 	private runStatus = "pending";
 	private outputDir?: string;
@@ -39,6 +39,8 @@ export class TeamRunComponent implements Component {
 	private lastTimestamp?: number;
 	private validationRound = 0;
 	private validationIssueCount = 0;
+	private repairRound = 0;
+	private currentTool = "-";
 	private tasks = new Map<string, TaskViewState>();
 
 	constructor(
@@ -61,14 +63,14 @@ export class TeamRunComponent implements Component {
 			}
 			return;
 		}
-		if (this.pendingApproval && matchesKey(data, "a")) {
-			this.run.approve(this.pendingApproval, "approve");
-			this.pendingApproval = undefined;
+		if (this.approvalQueue.length > 0 && matchesKey(data, "a")) {
+			const requestId = this.approvalQueue.shift();
+			if (requestId) this.run.approve(requestId, "approve");
 			return;
 		}
-		if (this.pendingApproval && matchesKey(data, "r")) {
-			this.run.approve(this.pendingApproval, "reject");
-			this.pendingApproval = undefined;
+		if (this.approvalQueue.length > 0 && matchesKey(data, "r")) {
+			const requestId = this.approvalQueue.shift();
+			if (requestId) this.run.approve(requestId, "reject");
 		}
 	}
 
@@ -76,7 +78,7 @@ export class TeamRunComponent implements Component {
 		this.lastTimestamp = event.timestamp;
 		switch (event.type) {
 			case "run_start":
-				this.runStatus = "running";
+				this.runStatus = "planning";
 				this.outputDir = event.outputDir;
 				this.startTimestamp = event.timestamp;
 				this.logs.push(`run started: ${event.requirement}`);
@@ -94,6 +96,7 @@ export class TeamRunComponent implements Component {
 						files: [],
 					});
 				});
+				this.runStatus = "running";
 				this.logs.push(`plan created: ${event.plan.tasks.length} task(s), ${event.plan.roles.length} role(s)`);
 				break;
 			case "task_start":
@@ -121,26 +124,32 @@ export class TeamRunComponent implements Component {
 				this.logs.push(`${event.taskId}: ${event.message}`);
 				break;
 			case "validation_start":
+				this.runStatus = "validating";
 				this.validationRound = event.round;
 				this.logs.push(`validation round ${event.round} started`);
 				break;
 			case "validation_end":
 				this.validationRound = event.round;
 				this.validationIssueCount = event.issues.length;
+				this.runStatus = event.issues.some((issue) => issue.severity === "error") ? "validating" : "running";
 				this.logs.push(`validation round ${event.round}: ${event.issues.length} issue(s)`);
 				for (const issue of event.issues.slice(0, 3)) {
-					this.logs.push(`${issue.severity}: ${issue.message}`);
+					const owner = issue.ownerTaskId ?? issue.ownerRole ?? "-";
+					const file = issue.file ?? "-";
+					this.logs.push(`${issue.id} owner: ${owner} file: ${file} ${issue.severity}: ${issue.message}`);
 				}
 				break;
 			case "repair_requested":
+				this.runStatus = "repairing";
+				this.repairRound = event.round;
 				this.logs.push(`repair round ${event.round}: ${event.tasks.length} task(s)`);
 				break;
 			case "approval_requested":
-				this.pendingApproval = event.requestId;
+				this.approvalQueue.push(event.requestId);
 				this.logs.push(`approval requested: ${event.reason}`);
 				break;
 			case "approval_resolved":
-				if (this.pendingApproval === event.requestId) this.pendingApproval = undefined;
+				this.approvalQueue = this.approvalQueue.filter((requestId) => requestId !== event.requestId);
 				this.logs.push(`approval ${event.decision}: ${event.requestId}`);
 				break;
 			case "run_paused":
@@ -163,6 +172,13 @@ export class TeamRunComponent implements Component {
 			case "agent_event":
 				// Skip LLM streaming delta events (noisy per-token events)
 				if (event.event.type === "message_update") break;
+				if (event.event.type === "tool_execution_start") {
+					const args = event.event.args as { path?: string; command?: string };
+					const target = args.path ?? args.command ?? "";
+					this.currentTool = `${event.taskId} ${event.event.toolName}${target ? ` ${target}` : ""}`;
+					this.logs.push(`tool: ${this.currentTool}`);
+					break;
+				}
 				this.logs.push(`agent event: ${event.taskId}: ${event.event.type}`);
 				break;
 			case "plan_updated":
@@ -197,12 +213,13 @@ export class TeamRunComponent implements Component {
 	private renderProgressSummary(): string[] {
 		const stats = this.taskStats();
 		const active = this.activeTasks().join(", ") || "-";
-		const approval = this.pendingApproval ? `approval pending: ${this.pendingApproval}` : "approval pending: -";
+		const approval = this.approvalQueue.length > 0 ? `approvals: ${this.approvalQueue.join(",")}` : "approvals: -";
 		return [
 			"",
 			chalk.bold("progress"),
 			`completed: ${stats.completed} | running: ${stats.running} | failed: ${stats.failed} | pending: ${stats.pending}`,
-			`active: ${active} | validation round: ${this.validationRound} | issues: ${this.validationIssueCount} | ${approval}`,
+			`active: ${active} | validation round: ${this.validationRound} | repair round: ${this.repairRound} | issues: ${this.validationIssueCount} | ${approval}`,
+			`tool: ${this.currentTool}`,
 		];
 	}
 
@@ -240,9 +257,10 @@ export class TeamRunComponent implements Component {
 	}
 
 	private renderFooter(): string[] {
-		const help = this.pendingApproval
-			? "keys: p pause/resume | a approve | r reject | ctrl+c abort"
-			: "keys: p pause/resume | ctrl+c abort";
+		const help =
+			this.approvalQueue.length > 0
+				? "keys: p pause/resume | a approve | r reject | ctrl+c abort"
+				: "keys: p pause/resume | ctrl+c abort";
 		return ["", chalk.dim(help)];
 	}
 

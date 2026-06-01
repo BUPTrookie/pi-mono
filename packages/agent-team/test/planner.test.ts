@@ -4,7 +4,13 @@ import { join } from "node:path";
 import type { Api, Model } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import { TaskGraph } from "../src/task/task-graph.js";
-import { llmPlannerRunner, parsePlannerOutput, taskFromSpec, writeContracts } from "../src/team/planner.js";
+import {
+	createRepairTasks,
+	llmPlannerRunner,
+	parsePlannerOutput,
+	taskFromSpec,
+	writeContracts,
+} from "../src/team/planner.js";
 
 const completeSimpleMock = vi.hoisted(() => vi.fn());
 
@@ -45,9 +51,9 @@ function plannerJson(domain: "polling" | "commerce"): string {
 			roles: [
 				{
 					name: "builder",
-					profile: "backend-engineer",
+					profile: "project-setup",
 					description: "Implements the planned project",
-					ownedDirectories: ["src", "client"],
+					ownedDirectories: ["."],
 				},
 				{
 					name: "validator",
@@ -63,7 +69,7 @@ function plannerJson(domain: "polling" | "commerce"): string {
 					subject: "Build application",
 					description: "Implement the project from the generated contracts.",
 					dependencies: [],
-					ownedDirectories: ["src", "client"],
+					ownedDirectories: ["."],
 					expectedOutputs: ["src/index.js", "package.json"],
 					acceptanceCriteria: ["Implementation follows the generated contracts."],
 				},
@@ -198,19 +204,19 @@ describe("LLM planner", () => {
 	});
 
 	it("rejects roles without owned paths", () => {
-		const text = plannerJson("polling").replace('"ownedDirectories":["src","client"]', '"ownedDirectories":[]');
+		const text = plannerJson("polling").replace('"ownedDirectories":["."]', '"ownedDirectories":[]');
 		expect(() => parsePlannerOutput(text)).toThrow("ownedDirectories");
 	});
 
 	it("rejects unknown role profiles", () => {
-		const text = plannerJson("polling").replace('"profile":"backend-engineer"', '"profile":"custom-engineer"');
+		const text = plannerJson("polling").replace('"profile":"project-setup"', '"profile":"custom-engineer"');
 		expect(() => parsePlannerOutput(text)).toThrow("Unknown role profile");
 	});
 
 	it("rejects planner-defined role runtime configuration", () => {
 		const text = plannerJson("polling").replace(
-			'"ownedDirectories":["src","client"]',
-			'"allowedTools":["bash"],"ownedDirectories":["src","client"]',
+			'"ownedDirectories":["."]',
+			'"allowedTools":["bash"],"ownedDirectories":["."]',
 		);
 		expect(() => parsePlannerOutput(text)).toThrow("must not define allowedTools");
 	});
@@ -223,5 +229,58 @@ describe("LLM planner", () => {
 	it("requires the e2e verifier task to depend on implementation and test tasks", () => {
 		const text = plannerJson("polling").replace('"dependencies":["build-app"]', '"dependencies":[]');
 		expect(() => parsePlannerOutput(text)).toThrow("must depend on");
+	});
+
+	it("rejects task expected outputs outside role owned paths", () => {
+		const text = plannerJson("polling").replace('"ownedDirectories":["."]', '"ownedDirectories":["src"]');
+		expect(() => parsePlannerOutput(text)).toThrow("expected output package.json is not covered");
+	});
+
+	it("rejects root write ownership for non project-setup profiles", () => {
+		const text = plannerJson("polling").replace('"profile":"project-setup"', '"profile":"backend-engineer"');
+		expect(() => parsePlannerOutput(text)).toThrow('Only project-setup roles may use "."');
+	});
+
+	it("allows project-setup roles to own the project root", () => {
+		const result = parsePlannerOutput(plannerJson("polling"));
+		expect(result.plan.roles[0]?.profile).toBe("project-setup");
+		expect(result.plan.roles[0]?.ownedDirectories).toContain(".");
+	});
+
+	it("routes repair tasks by owner task id, then file ownership, then fallback warning", () => {
+		const result = parsePlannerOutput(plannerJson("polling"));
+		result.plan.tasks[0].ownedDirectories = ["src"];
+		const repairTasks = createRepairTasks(
+			result.plan,
+			[
+				{ id: "owned", severity: "error", message: "Fix source", file: "src/index.js" },
+				{ id: "explicit", severity: "error", message: "Fix validator", ownerTaskId: "validate-app" },
+				{ id: "fallback", severity: "error", message: "Unknown owner", file: "outside/path.txt" },
+			],
+			1,
+		);
+
+		expect(repairTasks.map((task) => task.id)).toEqual(["repair-1-build-app", "repair-1-validate-app"]);
+		expect(repairTasks.find((task) => task.id === "repair-1-build-app")?.description).toContain(
+			"repair routing used fallback task",
+		);
+	});
+
+	it("routes file repairs to the most specific owned path", () => {
+		const result = parsePlannerOutput(plannerJson("polling"));
+		const repairTasks = createRepairTasks(
+			result.plan,
+			[
+				{
+					id: "e2e-report",
+					severity: "error",
+					message: "Report incomplete",
+					file: "docs/e2e-report.md",
+				},
+			],
+			1,
+		);
+
+		expect(repairTasks.map((task) => task.id)).toEqual(["repair-1-validate-app"]);
 	});
 });

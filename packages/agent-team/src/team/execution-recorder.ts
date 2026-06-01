@@ -15,6 +15,11 @@ export interface ExecutionRecorder {
 	finish(result: TeamResult): void;
 }
 
+interface RecorderState {
+	validationRounds: Array<{ round: number; issues: number }>;
+	repairRounds: Array<{ round: number; issues: number; tasks: number }>;
+}
+
 /** Keys whose values should always be redacted (API keys, tokens, etc.) */
 const SENSITIVE_KEY_PARTS = ["key", "token", "secret", "authorization", "password"];
 
@@ -81,22 +86,42 @@ function writeJsonl(path: string, envelope: RecordedTeamEvent): void {
 function formatIssueSummary(result: TeamResult): string {
 	const issues = result.validationIssues ?? [];
 	if (issues.length === 0) return "None";
-	return issues.map((issue) => `- ${issue.severity}: ${issue.message}`).join("\n");
+	return issues.map((issue) => `- ${issue.id}: ${issue.severity}: ${issue.message}`).join("\n");
 }
 
 function formatTaskRows(result: TeamResult): string {
-	if (result.tasks.length === 0) return "| _none_ | _none_ | 0 |  |  |";
+	if (result.tasks.length === 0) return "| _none_ | _none_ | 0 |  | 0 |  |  |";
 	return result.tasks
 		.map((task) => {
 			const status = task.success ? "success" : "failed";
 			const files = task.filesCreated.join(", ");
 			const error = task.error ?? "";
-			return `| ${task.taskId} | ${status} | ${task.turnsUsed} | ${files} | ${error} |`;
+			return `| ${task.taskId} | ${status} | ${task.turnsUsed} | ${files} | ${task.checksRun?.length ?? 0} | ${task.handoffPath ?? ""} | ${error} |`;
 		})
 		.join("\n");
 }
 
-function buildSummary(result: TeamResult): string {
+function formatChecks(result: TeamResult): string {
+	const checks = result.tasks.flatMap((task) =>
+		(task.checksRun ?? []).map(
+			(check) =>
+				`- ${task.taskId}: ${check.command} -> ${check.exitCode ?? "unknown"}${check.summary ? ` (${check.summary})` : ""}`,
+		),
+	);
+	return checks.length === 0 ? "None" : checks.join("\n");
+}
+
+function formatRepairSummary(state: RecorderState): string {
+	if (state.validationRounds.length === 0 && state.repairRounds.length === 0) return "None";
+	return [
+		...state.validationRounds.map((round) => `- validation round ${round.round}: ${round.issues} issue(s)`),
+		...state.repairRounds.map(
+			(round) => `- repair round ${round.round}: ${round.issues} issue(s), ${round.tasks} task(s)`,
+		),
+	].join("\n");
+}
+
+function buildSummary(result: TeamResult, state: RecorderState): string {
 	return [
 		"# Agent Team Run Summary",
 		"",
@@ -107,9 +132,17 @@ function buildSummary(result: TeamResult): string {
 		"",
 		"## Tasks",
 		"",
-		"| Task | Status | Turns | Files | Error |",
-		"| --- | --- | ---: | --- | --- |",
+		"| Task | Status | Turns | Files | Checks | Handoff | Error |",
+		"| --- | --- | ---: | --- | ---: | --- | --- |",
 		formatTaskRows(result),
+		"",
+		"## Checks Run",
+		"",
+		formatChecks(result),
+		"",
+		"## Validation And Repair",
+		"",
+		formatRepairSummary(state),
 		"",
 		"## Validation Issues",
 		"",
@@ -126,6 +159,7 @@ export function createExecutionRecorder(outputDir: string): ExecutionRecorder {
 	const eventsPath = join(baseDir, "events.jsonl");
 	const summaryPath = join(baseDir, "run-summary.md");
 	let seq = 0;
+	const state: RecorderState = { validationRounds: [], repairRounds: [] };
 
 	mkdirSync(tasksDir, { recursive: true });
 
@@ -133,6 +167,11 @@ export function createExecutionRecorder(outputDir: string): ExecutionRecorder {
 		record(event: TeamEvent): void {
 			// Skip streaming delta events — redundant with message_start/message_end
 			if (isStreamingDelta(event)) return;
+			if (event.type === "validation_end") {
+				state.validationRounds.push({ round: event.round, issues: event.issues.length });
+			} else if (event.type === "repair_requested") {
+				state.repairRounds.push({ round: event.round, issues: event.issues.length, tasks: event.tasks.length });
+			}
 
 			const safeEvent = redactEvent(event);
 			const envelope: RecordedTeamEvent = {
@@ -150,7 +189,7 @@ export function createExecutionRecorder(outputDir: string): ExecutionRecorder {
 
 		finish(result: TeamResult): void {
 			mkdirSync(baseDir, { recursive: true });
-			writeFileSync(summaryPath, buildSummary(result), "utf-8");
+			writeFileSync(summaryPath, buildSummary(result, state), "utf-8");
 		},
 	};
 }

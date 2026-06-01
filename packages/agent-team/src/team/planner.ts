@@ -140,6 +140,63 @@ function validateSafePaths(paths: string[], label: string): void {
 	}
 }
 
+function normalizePlanPath(path: string): string {
+	return path.trim().replace(/\\/g, "/").replace(/\/+$/g, "") || ".";
+}
+
+function isPathCoveredByOwnedPath(path: string, ownedPath: string): boolean {
+	const normalizedPath = normalizePlanPath(path);
+	const normalizedOwned = normalizePlanPath(ownedPath);
+	if (normalizedOwned === ".") return true;
+	return normalizedPath === normalizedOwned || normalizedPath.startsWith(`${normalizedOwned}/`);
+}
+
+function isPathCovered(path: string, ownedDirectories: string[]): boolean {
+	return ownedDirectories.some((owned) => isPathCoveredByOwnedPath(path, owned));
+}
+
+function ownedPathSpecificity(ownedPath: string): number {
+	const normalized = normalizePlanPath(ownedPath);
+	return normalized === "." ? 0 : normalized.length;
+}
+
+function findTaskOwnerForFile(plan: TeamPlan, file: string): string | undefined {
+	let ownerTaskId: string | undefined;
+	let bestSpecificity = -1;
+	for (const task of plan.tasks) {
+		for (const owned of task.ownedDirectories) {
+			if (!isPathCoveredByOwnedPath(file, owned)) continue;
+			const specificity = ownedPathSpecificity(owned);
+			if (specificity > bestSpecificity) {
+				ownerTaskId = task.id;
+				bestSpecificity = specificity;
+			}
+		}
+	}
+	return ownerTaskId;
+}
+
+function validateRoleOwnership(roles: RoleSpec[], tasks: TaskSpec[]): void {
+	const rolesByName = new Map(roles.map((role) => [role.name, role]));
+	for (const role of roles) {
+		if (role.profile !== "project-setup" && role.ownedDirectories.some((owned) => normalizePlanPath(owned) === ".")) {
+			throw new Error(`Only project-setup roles may use "." in ownedDirectories: ${role.name}`);
+		}
+	}
+
+	for (const task of tasks) {
+		const role = rolesByName.get(task.role);
+		if (!role) continue;
+		for (const expectedOutput of task.expectedOutputs) {
+			if (!isPathCovered(expectedOutput, role.ownedDirectories)) {
+				throw new Error(
+					`Task ${task.id} expected output ${expectedOutput} is not covered by role ${role.name} ownedDirectories.`,
+				);
+			}
+		}
+	}
+}
+
 function validateAcyclicTasks(tasks: TaskSpec[]): void {
 	const byId = new Map(tasks.map((task) => [task.id, task]));
 	const visiting = new Set<string>();
@@ -227,6 +284,7 @@ function validatePlannerJson(raw: RawPlannerJson): PlannerResult {
 		}
 	}
 	validateAcyclicTasks(tasks);
+	validateRoleOwnership(roles, tasks);
 	validateE2eVerifierTask(roles, tasks);
 
 	const contracts = buildContracts(raw);
@@ -430,10 +488,19 @@ export function writeContracts(outputDir: string, result: PlannerResult): void {
 export function createRepairTasks(plan: TeamPlan, issues: ValidationIssue[], round: number): RepairTask[] {
 	const grouped = new Map<string, ValidationIssue[]>();
 	for (const issue of issues.filter((item) => item.severity === "error")) {
-		const key = issue.ownerTaskId ?? issue.ownerRole ?? plan.tasks[0]?.id;
+		const ownerByFile = issue.file !== undefined ? findTaskOwnerForFile(plan, issue.file) : undefined;
+		const fallback = plan.tasks[0]?.id;
+		const key = issue.ownerTaskId ?? ownerByFile ?? issue.ownerRole ?? fallback;
 		if (!key) continue;
 		const current = grouped.get(key) ?? [];
-		current.push(issue);
+		current.push(
+			issue.ownerTaskId || ownerByFile || issue.ownerRole
+				? issue
+				: {
+						...issue,
+						message: `${issue.message} (warning: repair routing used fallback task because no owner matched.)`,
+					},
+		);
 		grouped.set(key, current);
 	}
 

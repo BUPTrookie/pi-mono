@@ -1,7 +1,8 @@
 import { spawn } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
-import type { TeamPlan, ValidationIssue } from "../types.js";
+import { explainUnsafeBash } from "../agent/bash-safety.js";
+import type { TaskCheckResult, TeamPlan, ValidationIssue } from "../types.js";
 
 interface PackageJson {
 	main?: string;
@@ -25,6 +26,14 @@ interface CommandResult {
 	exitCode: number | null;
 	output: string;
 	timedOut: boolean;
+}
+
+interface HandoffFile {
+	taskId?: unknown;
+	changedFiles?: unknown;
+	contractsSatisfied?: unknown;
+	checksRun?: unknown;
+	knownRisks?: unknown;
 }
 
 export interface RuntimeValidationOptions {
@@ -82,7 +91,12 @@ function globOutput(outputDir: string, pattern: string): string[] {
 			return;
 		}
 		// Convert glob segment to regex
-		const re = new RegExp(`^${seg.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "[^/]*").replace(/\?/g, "[^/]")}$`);
+		const re = new RegExp(
+			`^${seg
+				.replace(/[.+^${}()|[\]\\]/g, "\\$&")
+				.replace(/\*/g, "[^/]*")
+				.replace(/\?/g, "[^/]")}$`,
+		);
 		const currentDir = built.length === 0 ? outputDir : join(outputDir, ...built);
 		if (!existsSync(currentDir)) return;
 		for (const entry of readdirSync(currentDir, { withFileTypes: true })) {
@@ -127,6 +141,29 @@ function readJson(path: string): Record<string, unknown> | undefined {
 	} catch {
 		return undefined;
 	}
+}
+
+function sanitizeTaskId(taskId: string): string {
+	return taskId.replace(/[^a-zA-Z0-9._-]/g, "_");
+}
+
+function readHandoff(outputDir: string, taskId: string): HandoffFile | undefined {
+	return readJson(join(outputDir, "docs", "agent-team", "tasks", `${sanitizeTaskId(taskId)}-handoff.json`));
+}
+
+function normalizeChecksRun(value: unknown): TaskCheckResult[] {
+	if (!Array.isArray(value)) return [];
+	return value
+		.filter(
+			(item): item is Record<string, unknown> => item !== null && typeof item === "object" && !Array.isArray(item),
+		)
+		.map((item) => ({
+			command: typeof item.command === "string" ? item.command : "",
+			exitCode: typeof item.exitCode === "number" || item.exitCode === null ? item.exitCode : null,
+			summary: typeof item.summary === "string" ? item.summary : "",
+			required: typeof item.required === "boolean" ? item.required : true,
+		}))
+		.filter((check) => check.command.trim().length > 0);
 }
 
 function readPackageJson(outputDir: string): PackageJson | undefined {
@@ -285,6 +322,26 @@ function scriptExists(packageJson: PackageJson, name: string): boolean {
 	return typeof packageJson.scripts?.[name] === "string" && packageJson.scripts[name].trim().length > 0;
 }
 
+function isDangerousPackageScript(script: string): boolean {
+	return explainUnsafeBash(script) !== undefined;
+}
+
+function packageScriptIssue(
+	name: string,
+	script: string,
+	owner: Pick<ValidationIssue, "ownerRole" | "ownerTaskId">,
+): ValidationIssue {
+	return issue(
+		`security-package-script-${name.replace(/[^a-z0-9]+/gi, "-")}`,
+		`Package script "${name}" is unsafe and was not executed: ${script}`,
+		{
+			severity: "error",
+			file: "package.json",
+			...owner,
+		},
+	);
+}
+
 function ownerForFile(plan: TeamPlan, file: string): Pick<ValidationIssue, "ownerRole" | "ownerTaskId"> {
 	const normalized = file.split(/[\\/]/).join("/");
 	let ownerTask: TeamPlan["tasks"][number] | undefined;
@@ -382,13 +439,14 @@ function buildRuntimeCommands(
 	outputDir: string,
 	plan: TeamPlan,
 	options: ResolvedRuntimeValidationOptions,
-): CommandSpec[] {
+): { commands: CommandSpec[]; issues: ValidationIssue[] } {
 	const packageJson = readPackageJson(outputDir);
-	if (!packageJson) return [];
+	if (!packageJson) return { commands: [], issues: [] };
 
 	const packageOwner = ownerForPackage(plan);
 	const projectOwner = ownerForWholeProjectCheck(plan);
 	const commands: CommandSpec[] = [];
+	const issues: ValidationIssue[] = [];
 
 	if (options.installDependencies && hasDependencies(packageJson) && !existsSync(join(outputDir, "node_modules"))) {
 		commands.push({
@@ -401,36 +459,51 @@ function buildRuntimeCommands(
 	}
 
 	if (options.runPackageScripts && scriptExists(packageJson, "check")) {
-		commands.push({
-			id: "npm-run-check",
-			...npmCommandSpec(["run", "check"]),
-			timeoutMs: options.commandTimeoutMs,
-			file: "package.json",
-			...packageOwner,
-		});
+		const script = packageJson.scripts?.check ?? "";
+		if (isDangerousPackageScript(script)) {
+			issues.push(packageScriptIssue("check", script, packageOwner));
+		} else {
+			commands.push({
+				id: "npm-run-check",
+				...npmCommandSpec(["run", "check"]),
+				timeoutMs: options.commandTimeoutMs,
+				file: "package.json",
+				...packageOwner,
+			});
+		}
 	}
 
 	if (options.runPackageScripts && isUsefulTestScript(packageJson.scripts?.test)) {
-		commands.push({
-			id: "npm-test",
-			...npmCommandSpec(["test"]),
-			timeoutMs: options.commandTimeoutMs,
-			file: "package.json",
-			...projectOwner,
-		});
+		const script = packageJson.scripts?.test ?? "";
+		if (isDangerousPackageScript(script)) {
+			issues.push(packageScriptIssue("test", script, projectOwner));
+		} else {
+			commands.push({
+				id: "npm-test",
+				...npmCommandSpec(["test"]),
+				timeoutMs: options.commandTimeoutMs,
+				file: "package.json",
+				...projectOwner,
+			});
+		}
 	}
 
 	if (options.runPackageScripts && scriptExists(packageJson, "build")) {
-		commands.push({
-			id: "npm-run-build",
-			...npmCommandSpec(["run", "build"]),
-			timeoutMs: options.commandTimeoutMs,
-			file: "package.json",
-			...projectOwner,
-		});
+		const script = packageJson.scripts?.build ?? "";
+		if (isDangerousPackageScript(script)) {
+			issues.push(packageScriptIssue("build", script, projectOwner));
+		} else {
+			commands.push({
+				id: "npm-run-build",
+				...npmCommandSpec(["run", "build"]),
+				timeoutMs: options.commandTimeoutMs,
+				file: "package.json",
+				...projectOwner,
+			});
+		}
 	}
 
-	return commands;
+	return { commands, issues };
 }
 
 function collectSyntaxCheckFiles(outputDir: string): string[] {
@@ -538,6 +611,82 @@ export function validateTeamOutput(outputDir: string, plan: TeamPlan): Validatio
 		}
 	}
 
+	const rolesByName = new Map(plan.roles.map((role) => [role.name, role]));
+	for (const task of plan.tasks) {
+		if (rolesByName.get(task.role)?.profile !== "e2e-verifier") continue;
+		const reportPath = task.expectedOutputs.find((path) => path.endsWith("e2e-report.md")) ?? "docs/e2e-report.md";
+		if (!existsOutput(outputDir, reportPath)) continue;
+		let reportText = "";
+		try {
+			reportText = readFileSync(join(outputDir, reportPath), "utf-8").toLowerCase();
+		} catch {
+			continue;
+		}
+		const hasCommands = /\bcommands?\b/.test(reportText);
+		const hasExitStatus = /\b(exit\s+status|exit\s+code|status)\b/.test(reportText);
+		const hasObservedResult = /\bobserved\s+result\b/.test(reportText);
+		const hasAcceptanceStatus = /\bacceptance\s+status\b/.test(reportText);
+		if (!hasCommands || !hasExitStatus || !hasObservedResult || !hasAcceptanceStatus) {
+			issues.push(
+				issue(
+					`incomplete-e2e-report-${task.id}`,
+					`E2E report ${reportPath} must include commands, exit status, observed result, and acceptance status.`,
+					{ severity: "error", ownerRole: task.role, ownerTaskId: task.id, file: reportPath },
+				),
+			);
+		}
+	}
+
+	return issues;
+}
+
+function validateTaskHandoffs(outputDir: string, plan: TeamPlan): ValidationIssue[] {
+	const issues: ValidationIssue[] = [];
+	const rolesByName = new Map(plan.roles.map((role) => [role.name, role]));
+	for (const task of plan.tasks) {
+		const role = rolesByName.get(task.role);
+		if (role?.profile === "docs-engineer") continue;
+
+		const handoff = readHandoff(outputDir, task.id);
+		if (!handoff) {
+			issues.push(
+				issue(`missing-handoff-${task.id}`, `Task ${task.id} did not write its handoff JSON.`, {
+					severity: "error",
+					ownerRole: task.role,
+					ownerTaskId: task.id,
+				}),
+			);
+			issues.push(
+				issue(`missing-checks-run-${task.id}`, `Task ${task.id} did not report required self-checks.`, {
+					severity: "error",
+					ownerRole: task.role,
+					ownerTaskId: task.id,
+				}),
+			);
+			continue;
+		}
+
+		const checks = normalizeChecksRun(handoff.checksRun);
+		if (checks.length === 0) {
+			issues.push(
+				issue(`missing-checks-run-${task.id}`, `Task ${task.id} did not report required self-checks.`, {
+					severity: "error",
+					ownerRole: task.role,
+					ownerTaskId: task.id,
+				}),
+			);
+			continue;
+		}
+		if (!checks.some((check) => check.exitCode === 0)) {
+			issues.push(
+				issue(`failed-checks-run-${task.id}`, `Task ${task.id} reported checks but none succeeded.`, {
+					severity: "error",
+					ownerRole: task.role,
+					ownerTaskId: task.id,
+				}),
+			);
+		}
+	}
 	return issues;
 }
 
@@ -547,7 +696,6 @@ export async function validateTeamOutputWithChecks(
 	signalOrOptions?: AbortSignal | RuntimeValidationOptions,
 ): Promise<ValidationIssue[]> {
 	const staticIssues = validateTeamOutput(outputDir, plan);
-	if (staticIssues.some((item) => item.severity === "error")) return staticIssues;
 
 	const options: ResolvedRuntimeValidationOptions = {
 		installDependencies: true,
@@ -565,11 +713,12 @@ export async function validateTeamOutputWithChecks(
 		options.installTimeoutMs = signalOrOptions.installTimeoutMs ?? options.installTimeoutMs;
 	}
 
+	const runtime = buildRuntimeCommands(outputDir, plan, options);
 	const commands = [
 		...(options.runSyntaxChecks ? buildSyntaxCommands(outputDir, plan, options.commandTimeoutMs) : []),
-		...buildRuntimeCommands(outputDir, plan, options),
+		...runtime.commands,
 	];
-	const issues: ValidationIssue[] = [];
+	const issues: ValidationIssue[] = [...staticIssues, ...validateTaskHandoffs(outputDir, plan), ...runtime.issues];
 	for (const command of commands) {
 		if (options.signal?.aborted) break;
 		const result = await runCommand(outputDir, command, options.signal);

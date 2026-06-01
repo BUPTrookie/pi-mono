@@ -120,6 +120,15 @@ export interface TaskResult {
 	filesCreated: string[];
 	error?: string;
 	turnsUsed: number;
+	checksRun?: TaskCheckResult[];
+	handoffPath?: string;
+}
+
+export interface TaskCheckResult {
+	command: string;
+	exitCode: number | null;
+	summary: string;
+	required: boolean;
 }
 
 export type ValidationSeverity = "error" | "warning" | "info";

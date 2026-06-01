@@ -53,13 +53,15 @@ function nonFlagTokens(tokens: string[]): string[] {
 
 function extractSimpleCommandTargets(command: string): string[] {
 	const targets: string[] = [];
-	for (const segment of command.split(/\s*(?:&&|\|\||;|\r?\n)\s*/)) {
+	for (const segment of command.split(/\s*(?:&&|\|\||[|;]|\r?\n)\s*/)) {
 		const tokens = tokenizeCommand(segment);
 		if (tokens.length === 0) continue;
 		const commandName = tokens[0].toLowerCase();
 		const args = tokens.slice(1);
 
 		if (commandName === "touch" || commandName === "mkdir" || commandName === "md") {
+			targets.push(...nonFlagTokens(args));
+		} else if (commandName === "tee") {
 			targets.push(...nonFlagTokens(args));
 		} else if (commandName === "cp" || commandName === "mv") {
 			const positional = nonFlagTokens(args);
