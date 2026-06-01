@@ -1,0 +1,138 @@
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import type { AgentEvent } from "@mariozechner/pi-agent-core";
+import type { TeamEvent, TeamResult } from "../types.js";
+
+export interface RecordedTeamEvent {
+	seq: number;
+	timestamp: number;
+	type: TeamEvent["type"];
+	event: TeamEvent;
+}
+
+export interface ExecutionRecorder {
+	record(event: TeamEvent): void;
+	finish(result: TeamResult): void;
+}
+
+const SENSITIVE_KEY_PARTS = ["key", "token", "secret", "authorization", "password"];
+const LARGE_TEXT_KEYS = ["content", "prompt", "systemPrompt", "messages"];
+
+function sanitizeTaskId(taskId: string): string {
+	return taskId.replace(/[^a-zA-Z0-9._-]/g, "_");
+}
+
+function taskIdForEvent(event: TeamEvent): string | undefined {
+	switch (event.type) {
+		case "task_start":
+		case "task_end":
+			return event.task.id;
+		case "task_progress":
+		case "agent_event":
+		case "approval_requested":
+			return event.taskId;
+		default:
+			return undefined;
+	}
+}
+
+function shouldRedactKey(key: string): boolean {
+	const normalized = key.toLowerCase();
+	return SENSITIVE_KEY_PARTS.some((part) => normalized.includes(part)) || LARGE_TEXT_KEYS.includes(key);
+}
+
+function redactValue(value: unknown, key = ""): unknown {
+	if (key && shouldRedactKey(key)) return "[redacted]";
+	if (Array.isArray(value)) return value.map((item) => redactValue(item));
+	if (value && typeof value === "object") {
+		const redacted: Record<string, unknown> = {};
+		for (const [entryKey, entryValue] of Object.entries(value)) {
+			redacted[entryKey] = redactValue(entryValue, entryKey);
+		}
+		return redacted;
+	}
+	return value;
+}
+
+function redactEvent(event: TeamEvent): TeamEvent {
+	if (event.type !== "agent_event") return event;
+	return { ...event, event: redactValue(event.event) as AgentEvent };
+}
+
+function writeJsonl(path: string, envelope: RecordedTeamEvent): void {
+	appendFileSync(path, `${JSON.stringify(envelope)}\n`, "utf-8");
+}
+
+function formatIssueSummary(result: TeamResult): string {
+	const issues = result.validationIssues ?? [];
+	if (issues.length === 0) return "None";
+	return issues.map((issue) => `- ${issue.severity}: ${issue.message}`).join("\n");
+}
+
+function formatTaskRows(result: TeamResult): string {
+	if (result.tasks.length === 0) return "| _none_ | _none_ | 0 |  |  |";
+	return result.tasks
+		.map((task) => {
+			const status = task.success ? "success" : "failed";
+			const files = task.filesCreated.join(", ");
+			const error = task.error ?? "";
+			return `| ${task.taskId} | ${status} | ${task.turnsUsed} | ${files} | ${error} |`;
+		})
+		.join("\n");
+}
+
+function buildSummary(result: TeamResult): string {
+	return [
+		"# Agent Team Run Summary",
+		"",
+		`Success: ${result.success}`,
+		`Output Dir: ${result.outputDir}`,
+		`Total Turns: ${result.totalTurns}`,
+		result.error ? `Error: ${result.error}` : undefined,
+		"",
+		"## Tasks",
+		"",
+		"| Task | Status | Turns | Files | Error |",
+		"| --- | --- | ---: | --- | --- |",
+		formatTaskRows(result),
+		"",
+		"## Validation Issues",
+		"",
+		formatIssueSummary(result),
+		"",
+	]
+		.filter((line): line is string => line !== undefined)
+		.join("\n");
+}
+
+export function createExecutionRecorder(outputDir: string): ExecutionRecorder {
+	const baseDir = join(outputDir, "docs", "agent-team");
+	const tasksDir = join(baseDir, "tasks");
+	const eventsPath = join(baseDir, "events.jsonl");
+	const summaryPath = join(baseDir, "run-summary.md");
+	let seq = 0;
+
+	mkdirSync(tasksDir, { recursive: true });
+
+	return {
+		record(event: TeamEvent): void {
+			const safeEvent = redactEvent(event);
+			const envelope: RecordedTeamEvent = {
+				seq: ++seq,
+				timestamp: event.timestamp,
+				type: event.type,
+				event: safeEvent,
+			};
+			writeJsonl(eventsPath, envelope);
+			const taskId = taskIdForEvent(event);
+			if (taskId) {
+				writeJsonl(join(tasksDir, `${sanitizeTaskId(taskId)}.jsonl`), envelope);
+			}
+		},
+
+		finish(result: TeamResult): void {
+			mkdirSync(baseDir, { recursive: true });
+			writeFileSync(summaryPath, buildSummary(result), "utf-8");
+		},
+	};
+}

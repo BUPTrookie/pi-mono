@@ -19,6 +19,11 @@ export { buildRoleSystemPrompt, getSystemPrompt } from "./roles/system-prompts.j
 export { TaskGraph } from "./task/task-graph.js";
 export { TaskScheduler } from "./task/task-scheduler.js";
 export {
+	createExecutionRecorder,
+	type ExecutionRecorder,
+	type RecordedTeamEvent,
+} from "./team/execution-recorder.js";
+export {
 	createRepairTasks,
 	createRoleRegistry as createPlanRoleRegistry,
 	llmPlannerRunner,
@@ -27,9 +32,9 @@ export {
 	writeContracts,
 } from "./team/planner.js";
 export { TeamLead } from "./team/team-lead.js";
-export { createTeamRun, runTeam } from "./team/team-runner.js";
+export { createTeamRun, runTeam, type TeamRunOverrides } from "./team/team-runner.js";
 export { type RuntimeValidationOptions, validateTeamOutput, validateTeamOutputWithChecks } from "./team/validator.js";
-export { runTeamTui } from "./tui/team-tui.js";
+export { runTeamTui, TeamRunComponent, type TeamRunComponentOptions } from "./tui/team-tui.js";
 export type {
 	AgentRoleName,
 	ApprovalDecision,

@@ -3,11 +3,31 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { Api, Model } from "@mariozechner/pi-ai";
 import { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
-import type { ApprovalDecision, TeamConfig, TeamEvent, TeamEventListener, TeamResult, TeamRun } from "../types.js";
-import { TeamLead } from "./team-lead.js";
+import type {
+	ApprovalDecision,
+	PlannerRunner,
+	TeamConfig,
+	TeamEvent,
+	TeamEventListener,
+	TeamResult,
+	TeamRun,
+} from "../types.js";
+import { createExecutionRecorder, type ExecutionRecorder } from "./execution-recorder.js";
+import { type TeamAgentRunner, TeamLead, type TeamValidatorRunner } from "./team-lead.js";
 
 interface PendingApproval {
 	resolve: (decision: ApprovalDecision) => void;
+}
+
+type ApiKeyResolver = (provider: string) => Promise<string | undefined> | string | undefined;
+
+export interface TeamRunOverrides {
+	model?: Model<Api>;
+	plannerRunner?: PlannerRunner;
+	agentRunner?: TeamAgentRunner;
+	validatorRunner?: TeamValidatorRunner;
+	getApiKey?: ApiKeyResolver;
+	recorderFactory?: (outputDir: string) => ExecutionRecorder;
 }
 
 function deriveProjectSlug(requirement: string): string {
@@ -119,8 +139,12 @@ class DynamicTeamRun implements TeamRun {
 	private approvals = new Map<string, PendingApproval>();
 	private interventions: string[] = [];
 	private approvalCounter = 0;
+	private recorder?: ExecutionRecorder;
 
-	constructor(private config: TeamConfig) {}
+	constructor(
+		private config: TeamConfig,
+		private overrides: TeamRunOverrides = {},
+	) {}
 
 	subscribe(listener: TeamEventListener): () => void {
 		this.listeners.push(listener);
@@ -175,42 +199,69 @@ class DynamicTeamRun implements TeamRun {
 		this.started = true;
 
 		const projectConfig = this.prepareProjectConfig();
-		const authStorage = AuthStorage.create(join(homedir(), ".pi", "auth.json"));
-		const resolvedProvider = projectConfig.model.provider;
-		if (projectConfig.model.apiKey && resolvedProvider) {
-			authStorage.setRuntimeApiKey(resolvedProvider, projectConfig.model.apiKey);
-		}
-		const modelRegistry = ModelRegistry.create(authStorage);
-		const model = resolveModel(
-			modelRegistry,
-			resolvedProvider,
-			projectConfig.model.model,
-			projectConfig.model.baseUrl,
-		);
+		this.recorder = (this.overrides.recorderFactory ?? createExecutionRecorder)(projectConfig.outputDir);
+		let result: TeamResult | undefined;
 
-		// Set API key for the resolved provider if it differs from the configured one
-		if (projectConfig.model.apiKey && model.provider !== resolvedProvider) {
-			authStorage.setRuntimeApiKey(model.provider, projectConfig.model.apiKey);
-		}
-
-		const getApiKey = async (provider: string) => {
-			if (projectConfig.model.apiKey) return projectConfig.model.apiKey;
-			const key = await modelRegistry.getApiKeyForProvider(provider);
-			if (!key) {
-				throw new Error(
-					`No API key found for ${provider}. Set the appropriate environment variable or configure auth storage.`,
-				);
+		try {
+			const authStorage = AuthStorage.create(join(homedir(), ".pi", "auth.json"));
+			const resolvedProvider = projectConfig.model.provider;
+			if (projectConfig.model.apiKey && resolvedProvider) {
+				authStorage.setRuntimeApiKey(resolvedProvider, projectConfig.model.apiKey);
 			}
-			return key;
-		};
+			const modelRegistry = ModelRegistry.create(authStorage);
+			const model =
+				this.overrides.model ??
+				resolveModel(modelRegistry, resolvedProvider, projectConfig.model.model, projectConfig.model.baseUrl);
 
-		this.lead = new TeamLead(projectConfig, model, getApiKey, (event) => this.emit(event), {
-			waitIfPaused: () => this.waitIfPaused(),
-			requestApproval: (request) => this.requestApproval(request.taskId, request.reason, request.command),
-			getInterventions: () => [...this.interventions],
-		});
+			// Set API key for the resolved provider if it differs from the configured one
+			if (projectConfig.model.apiKey && model.provider !== resolvedProvider) {
+				authStorage.setRuntimeApiKey(model.provider, projectConfig.model.apiKey);
+			}
 
-		return this.lead.orchestrate();
+			const getApiKey =
+				this.overrides.getApiKey ??
+				(async (provider: string) => {
+					if (projectConfig.model.apiKey) return projectConfig.model.apiKey;
+					const key = await modelRegistry.getApiKeyForProvider(provider);
+					if (!key) {
+						throw new Error(
+							`No API key found for ${provider}. Set the appropriate environment variable or configure auth storage.`,
+						);
+					}
+					return key;
+				});
+
+			this.lead = new TeamLead(
+				projectConfig,
+				model,
+				getApiKey,
+				(event) => this.emit(event),
+				{
+					waitIfPaused: () => this.waitIfPaused(),
+					requestApproval: (request) => this.requestApproval(request.taskId, request.reason, request.command),
+					getInterventions: () => [...this.interventions],
+				},
+				this.overrides.agentRunner,
+				this.overrides.plannerRunner,
+				this.overrides.validatorRunner,
+			);
+
+			result = await this.lead.orchestrate();
+			return result;
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			result = {
+				success: false,
+				outputDir: projectConfig.outputDir,
+				tasks: [],
+				totalTurns: 0,
+				error: message,
+			};
+			this.emit({ type: "run_end", result, timestamp: Date.now() });
+			return result;
+		} finally {
+			if (result) this.recorder.finish(result);
+		}
 	}
 
 	private prepareProjectConfig(): TeamConfig {
@@ -222,6 +273,7 @@ class DynamicTeamRun implements TeamRun {
 	}
 
 	private emit(event: TeamEvent): void {
+		this.recorder?.record(event);
 		for (const listener of this.listeners) {
 			listener(event);
 		}
@@ -244,8 +296,8 @@ class DynamicTeamRun implements TeamRun {
 	}
 }
 
-export function createTeamRun(config: TeamConfig): TeamRun {
-	return new DynamicTeamRun(config);
+export function createTeamRun(config: TeamConfig, overrides: TeamRunOverrides = {}): TeamRun {
+	return new DynamicTeamRun(config, overrides);
 }
 
 export async function runTeam(config: TeamConfig): Promise<TeamResult> {
