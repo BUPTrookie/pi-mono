@@ -231,6 +231,72 @@ describe("LLM planner", () => {
 		expect(() => parsePlannerOutput(text)).toThrow("must depend on");
 	});
 
+	it("reports all missing e2e verifier dependencies in one validation error", () => {
+		const text = JSON.stringify({
+			teamPlan: {
+				id: "missing-e2e-deps",
+				summary: "Project with multiple implementation tasks",
+				roles: [
+					{
+						name: "setup",
+						profile: "project-setup",
+						description: "Initializes the project",
+						ownedDirectories: ["."],
+					},
+					{
+						name: "data",
+						profile: "data-engineer",
+						description: "Builds persistence",
+						ownedDirectories: ["src/db"],
+					},
+					{
+						name: "e2e",
+						profile: "e2e-verifier",
+						description: "Runs final verification",
+						ownedDirectories: ["tests/e2e", "docs/e2e-report.md"],
+					},
+				],
+				tasks: [
+					{
+						id: "proj-init",
+						role: "setup",
+						subject: "Initialize project",
+						description: "Create project files.",
+						dependencies: [],
+						ownedDirectories: ["."],
+						expectedOutputs: ["package.json"],
+						acceptanceCriteria: ["Project is initialized."],
+					},
+					{
+						id: "data-layer",
+						role: "data",
+						subject: "Build data layer",
+						description: "Create persistence.",
+						dependencies: ["proj-init"],
+						ownedDirectories: ["src/db"],
+						expectedOutputs: ["src/db/index.js"],
+						acceptanceCriteria: ["Data layer exists."],
+					},
+					{
+						id: "e2e-verify",
+						role: "e2e",
+						subject: "Verify",
+						description: "Run final E2E checks.",
+						dependencies: [],
+						ownedDirectories: ["tests/e2e", "docs/e2e-report.md"],
+						expectedOutputs: ["docs/e2e-report.md"],
+						acceptanceCriteria: ["E2E report exists."],
+					},
+				],
+				validationRules: ["E2E verifier depends on implementation tasks."],
+			},
+			projectManifest: { goal: "Build project", features: ["data"] },
+			dataModel: { entities: [{ name: "Note" }] },
+		});
+
+		expect(() => parsePlannerOutput(text)).toThrow("proj-init, data-layer");
+	});
+
 	it("allows broad ownership in open permission mode", () => {
 		const text = plannerJson("polling").replace('"ownedDirectories":["."]', '"ownedDirectories":["src"]');
 
@@ -294,6 +360,30 @@ describe("LLM planner", () => {
 		);
 
 		expect(repairTasks.map((task) => task.id)).toEqual(["repair-1-validate-app"]);
+	});
+
+	it("remaps repair task dependencies to preserve the original DAG", () => {
+		const result = parsePlannerOutput(plannerJson("polling"));
+		const repairTasks = createRepairTasks(
+			result.plan,
+			[
+				{ id: "build-error", severity: "error", message: "Build failed", ownerTaskId: "build-app" },
+				{
+					id: "e2e-error",
+					severity: "error",
+					message: "E2E report missing",
+					ownerTaskId: "validate-app",
+					file: "docs/e2e-report.md",
+				},
+			],
+			1,
+		);
+
+		const validateRepair = repairTasks.find((task) => task.id === "repair-1-validate-app");
+		expect(repairTasks.map((task) => task.id)).toEqual(["repair-1-build-app", "repair-1-validate-app"]);
+		expect(validateRepair?.dependencies).toEqual(["repair-1-build-app"]);
+		expect(validateRepair?.attemptMode).toBe("rerun");
+		expect(validateRepair?.continuedFrom).toBe("validate-app");
 	});
 
 	it("adds explicit repair focus for empty agent output", () => {

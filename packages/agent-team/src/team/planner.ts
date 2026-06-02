@@ -75,6 +75,8 @@ export function taskFromSpec(spec: TaskSpec): Task {
 		expectedOutputs: spec.expectedOutputs,
 		acceptanceCriteria: spec.acceptanceCriteria,
 		repairOf: spec.repairOf,
+		attemptMode: spec.attemptMode,
+		continuedFrom: spec.continuedFrom,
 	};
 }
 
@@ -247,10 +249,13 @@ function validateE2eVerifierTask(roles: RoleSpec[], tasks: TaskSpec[]): void {
 		if (task.id === e2eTask.id) return false;
 		return rolesByName.get(task.role)?.profile !== "docs-engineer";
 	});
-	for (const dependency of requiredDependencies) {
-		if (!dependencies.has(dependency.id)) {
-			throw new Error(`e2e-verifier task ${e2eTask.id} must depend on ${dependency.id}.`);
-		}
+	const missingDependencies = requiredDependencies
+		.filter((dependency) => !dependencies.has(dependency.id))
+		.map((dependency) => dependency.id);
+	if (missingDependencies.length > 0) {
+		throw new Error(
+			`e2e-verifier task ${e2eTask.id} must depend on all implementation and test tasks. Missing dependencies: ${missingDependencies.join(", ")}.`,
+		);
 	}
 }
 
@@ -493,9 +498,39 @@ function repairFocusText(task: TaskSpec, issues: ValidationIssue[]): string {
 	].join("\n");
 }
 
+function isCascadeDependencyIssue(issue: ValidationIssue): boolean {
+	return /Dependency '.+' (?:failed|did not produce expected output)/i.test(issue.message);
+}
+
+function taskDependsOn(plan: TeamPlan, taskId: string, dependencyId: string): boolean {
+	const byId = new Map(plan.tasks.map((task) => [task.id, task]));
+	const queue = [...(byId.get(taskId)?.dependencies ?? [])];
+	const visited = new Set<string>();
+	while (queue.length > 0) {
+		const current = queue.shift();
+		if (!current || visited.has(current)) continue;
+		if (current === dependencyId) return true;
+		visited.add(current);
+		queue.push(...(byId.get(current)?.dependencies ?? []));
+	}
+	return false;
+}
+
+function downstreamTaskIds(plan: TeamPlan, rootTaskIds: Set<string>): Set<string> {
+	const downstream = new Set<string>();
+	for (const task of plan.tasks) {
+		if (rootTaskIds.has(task.id)) continue;
+		for (const rootTaskId of rootTaskIds) {
+			if (taskDependsOn(plan, task.id, rootTaskId)) downstream.add(task.id);
+		}
+	}
+	return downstream;
+}
+
 export function createRepairTasks(plan: TeamPlan, issues: ValidationIssue[], round: number): RepairTask[] {
 	const grouped = new Map<string, ValidationIssue[]>();
 	for (const issue of issues.filter((item) => item.severity === "error")) {
+		if (isCascadeDependencyIssue(issue)) continue;
 		const ownerByFile = issue.file !== undefined ? findTaskOwnerForFile(plan, issue.file) : undefined;
 		const fallback = plan.tasks[0]?.id;
 		const key = issue.ownerTaskId ?? ownerByFile ?? issue.ownerRole ?? fallback;
@@ -512,24 +547,52 @@ export function createRepairTasks(plan: TeamPlan, issues: ValidationIssue[], rou
 		grouped.set(key, current);
 	}
 
-	const tasks: RepairTask[] = [];
-	for (const [owner, ownerIssues] of grouped.entries()) {
+	const ownerToTask = new Map<string, TaskSpec>();
+	for (const owner of grouped.keys()) {
 		const originalTask =
-			plan.tasks.find((task) => task.id === owner) ??
-			plan.tasks.find((task) => task.role === owner) ??
-			plan.tasks[0];
-		if (!originalTask) continue;
+			plan.tasks.find((task) => task.id === owner) ?? plan.tasks.find((task) => task.role === owner);
+		if (originalTask) ownerToTask.set(originalTask.id, originalTask);
+	}
+	const directRootIds = new Set(ownerToTask.keys());
+	const rootIds = new Set(
+		[...directRootIds].filter(
+			(taskId) =>
+				![...directRootIds].some(
+					(candidateRoot) => candidateRoot !== taskId && taskDependsOn(plan, taskId, candidateRoot),
+				),
+		),
+	);
+	const selectedIds = new Set([...rootIds, ...downstreamTaskIds(plan, rootIds)]);
+	const selectedTasks = plan.tasks.filter((task) => selectedIds.has(task.id));
+	const repairIdByOriginalId = new Map(selectedTasks.map((task) => [task.id, `repair-${round}-${task.id}`]));
+
+	const tasks: RepairTask[] = [];
+	for (const originalTask of selectedTasks) {
+		const ownerIssues = grouped.get(originalTask.id) ?? [];
+		const isRootRepair = rootIds.has(originalTask.id);
+		const dependencyIds = originalTask.dependencies
+			.map((dependency) => repairIdByOriginalId.get(dependency))
+			.filter((dependency): dependency is string => dependency !== undefined);
 		const issueText = ownerIssues.map((issue) => `- ${issue.id}: ${issue.message}`).join("\n");
+		const rerunReason =
+			ownerIssues.length > 0
+				? issueText
+				: `Rerun after upstream repair: ${[...rootIds].filter((rootId) => taskDependsOn(plan, originalTask.id, rootId)).join(", ")}`;
 		tasks.push({
 			...originalTask,
 			id: `repair-${round}-${originalTask.id}`,
-			subject: `Repair ${originalTask.subject}`,
-			description: `${originalTask.description}\n\nFix these validation issues:\n${issueText}\n\n${repairFocusText(
+			subject: `${isRootRepair ? "Repair" : "Rerun"} ${originalTask.subject}`,
+			description: `${originalTask.description}\n\n${isRootRepair ? "Fix these validation issues" : "Rerun after upstream repair"}:\n${rerunReason}\n\n${repairFocusText(
 				originalTask,
 				ownerIssues,
 			)}`,
-			dependencies: [],
-			repairOf: ownerIssues.map((issue) => issue.id),
+			dependencies: dependencyIds,
+			repairOf:
+				ownerIssues.length > 0
+					? ownerIssues.map((issue) => issue.id)
+					: [...rootIds].map((rootId) => `rerun-after-${rootId}`),
+			attemptMode: isRootRepair ? "continue" : "rerun",
+			continuedFrom: originalTask.id,
 		});
 	}
 	return tasks;

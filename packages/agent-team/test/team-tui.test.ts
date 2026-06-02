@@ -117,6 +117,9 @@ describe("TeamRunComponent", () => {
 					output: "ok",
 					filesCreated: ["src/index.js", "package.json"],
 					turnsUsed: 3,
+					attempt: 2,
+					attemptMode: "continue",
+					continuedFrom: "build-cli",
 				},
 				timestamp: 5,
 			},
@@ -175,6 +178,7 @@ describe("TeamRunComponent", () => {
 		expect(rendered).toContain("completed");
 		expect(rendered).toContain("files: 2");
 		expect(rendered).toContain("turns: 3");
+		expect(rendered).toContain("attempt: 2/continue");
 		expect(rendered).toContain("test-cli");
 		expect(rendered).toContain("tester/e2e-verifier");
 		expect(rendered).toContain("running");

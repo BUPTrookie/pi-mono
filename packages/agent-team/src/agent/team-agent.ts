@@ -11,6 +11,7 @@ import type {
 	InterventionMode,
 	PermissionMode,
 	RoleDefinition,
+	TaskAttemptMode,
 	TaskCheckResult,
 	TaskResult,
 } from "../types.js";
@@ -42,6 +43,23 @@ export interface TeamAgentConfig {
 		riskLevel?: "safe" | "medium" | "high";
 		category?: string;
 	}) => Promise<ApprovalDecision>;
+}
+
+export interface TeamAgentAttemptOptions {
+	taskId?: string;
+	attempt?: number;
+	attemptMode?: TaskAttemptMode;
+	continuedFrom?: string;
+	onAgentEvent?: (event: AgentEvent) => void;
+	onTaskProgress?: (message: string) => void;
+}
+
+export interface TeamAgentSession {
+	readonly messages: AgentMessage[];
+	readonly turnsUsed: number;
+	prompt(taskDescription: string, options?: TeamAgentAttemptOptions): Promise<TaskResult>;
+	continueWith(feedback: string, options?: TeamAgentAttemptOptions): Promise<TaskResult>;
+	dispose(): void;
 }
 
 /**
@@ -109,6 +127,9 @@ export function buildTaskResultFromAgentState(options: {
 	events: AgentEvent[];
 	turnsUsed: number;
 	fallbackError?: string;
+	attempt?: number;
+	attemptMode?: TaskAttemptMode;
+	continuedFrom?: string;
 }): TaskResult {
 	const output = extractFinalText(options.messages);
 	const filesCreated = extractFilesCreated(options.messages);
@@ -122,6 +143,9 @@ export function buildTaskResultFromAgentState(options: {
 			error: `Agent ${options.roleName} produced an empty response and changed no files.`,
 			turnsUsed: options.turnsUsed,
 			checksRun,
+			attempt: options.attempt,
+			attemptMode: options.attemptMode,
+			continuedFrom: options.continuedFrom,
 		};
 	}
 	return {
@@ -132,6 +156,9 @@ export function buildTaskResultFromAgentState(options: {
 		error: options.fallbackError,
 		turnsUsed: options.turnsUsed,
 		checksRun,
+		attempt: options.attempt,
+		attemptMode: options.attemptMode,
+		continuedFrom: options.continuedFrom,
 	};
 }
 
@@ -216,16 +243,17 @@ function createContractAwareTransformContext(
 	};
 }
 
-/**
- * Run a team agent to completion for a specific task.
- * Follows the bot's runSubAgent pattern with ownership enforcement.
- */
-export async function runTeamAgent(taskDescription: string, config: TeamAgentConfig): Promise<TaskResult> {
+export function createTeamAgentSession(config: TeamAgentConfig): TeamAgentSession {
 	const { role, model, outputDir, streamFn, getApiKey, parentSignal, thinkingLevel } = config;
 	const maxTurns = role.maxTurns;
 	const permissionMode = config.permissionMode ?? "open";
 	const executionMode = config.executionMode ?? "open";
 	const approvalPolicy = config.approvalPolicy ?? "minimal";
+	let currentAttempt: TeamAgentAttemptOptions = {
+		taskId: config.taskId,
+		onAgentEvent: config.onAgentEvent,
+		onTaskProgress: config.onTaskProgress,
+	};
 
 	const tools = buildToolPool(role, outputDir);
 	const ownershipGuard =
@@ -252,14 +280,16 @@ export async function runTeamAgent(taskDescription: string, config: TeamAgentCon
 		beforeToolCall: async (context) => {
 			const ownershipResult = ownershipGuard ? await ownershipGuard(context) : undefined;
 			if (ownershipResult?.block) {
-				config.onTaskProgress?.(
+				currentAttempt.onTaskProgress?.(
 					`Blocked ${context.toolCall.name}: ${ownershipResult.reason ?? "outside owned paths"}`,
 				);
 				return ownershipResult;
 			}
 			const bashResult = await bashSafetyGuard(context);
 			if (bashResult?.block) {
-				config.onTaskProgress?.(`Blocked ${context.toolCall.name}: ${bashResult.reason ?? "unsafe command"}`);
+				currentAttempt.onTaskProgress?.(
+					`Blocked ${context.toolCall.name}: ${bashResult.reason ?? "unsafe command"}`,
+				);
 			}
 			return bashResult;
 		},
@@ -269,78 +299,127 @@ export async function runTeamAgent(taskDescription: string, config: TeamAgentCon
 	// Propagate parent abort
 	let onParentAbort: (() => void) | undefined;
 	if (parentSignal) {
-		if (parentSignal.aborted) {
-			return {
-				taskId: config.taskId ?? "",
-				success: false,
-				output: "",
-				filesCreated: [],
-				error: "Parent aborted",
-				turnsUsed: 0,
-			};
-		}
 		onParentAbort = () => agent.abort();
 		parentSignal.addEventListener("abort", onParentAbort, { once: true });
 	}
 
-	// Track turns and enforce maxTurns
 	let turnsUsed = 0;
+	let attemptStartTurns = 0;
 	const events: AgentEvent[] = [];
 	const unsubscribe = agent.subscribe((event) => {
 		events.push(event);
-		config.onAgentEvent?.(event);
+		currentAttempt.onAgentEvent?.(event);
 		if (event.type === "turn_end") {
 			turnsUsed++;
-			if (turnsUsed >= maxTurns) {
+			if (turnsUsed - attemptStartTurns >= maxTurns) {
 				agent.abort();
 			}
 		}
 	});
 
-	try {
-		await agent.prompt(taskDescription);
+	const runPrompt = async (input: string, options: TeamAgentAttemptOptions = {}): Promise<TaskResult> => {
+		currentAttempt = {
+			taskId: options.taskId ?? config.taskId,
+			attempt: options.attempt,
+			attemptMode: options.attemptMode,
+			continuedFrom: options.continuedFrom,
+			onAgentEvent: options.onAgentEvent ?? config.onAgentEvent,
+			onTaskProgress: options.onTaskProgress ?? config.onTaskProgress,
+		};
+		if (parentSignal?.aborted) {
+			return {
+				taskId: currentAttempt.taskId ?? "",
+				success: false,
+				output: "",
+				filesCreated: [],
+				error: "Parent aborted",
+				turnsUsed,
+				attempt: currentAttempt.attempt,
+				attemptMode: currentAttempt.attemptMode,
+				continuedFrom: currentAttempt.continuedFrom,
+			};
+		}
+		attemptStartTurns = turnsUsed;
+		try {
+			await agent.prompt(input);
+		} catch (err) {
+			const parentAborted = parentSignal?.aborted ?? false;
+			const reachedMaxTurns = turnsUsed - attemptStartTurns >= maxTurns;
+			const isAborted = parentAborted || reachedMaxTurns;
+			const error = isAborted
+				? parentAborted
+					? "Parent aborted"
+					: `Agent reached maximum turns (${maxTurns})`
+				: err instanceof Error
+					? err.message
+					: String(err);
+			const result = buildTaskResultFromAgentState({
+				taskId: currentAttempt.taskId ?? "",
+				roleName: role.name,
+				messages: agent.state.messages,
+				events,
+				turnsUsed,
+				fallbackError: error,
+				attempt: currentAttempt.attempt,
+				attemptMode: currentAttempt.attemptMode,
+				continuedFrom: currentAttempt.continuedFrom,
+			});
+			result.handoffPath = writeTaskHandoff(outputDir, result.taskId || role.name, result);
+			return result;
+		}
 		const parentAborted = parentSignal?.aborted ?? false;
-		const reachedMaxTurns = turnsUsed >= maxTurns;
+		const reachedMaxTurns = turnsUsed - attemptStartTurns >= maxTurns;
 		const completionError = parentAborted
 			? "Parent aborted"
 			: reachedMaxTurns
 				? `Agent reached maximum turns (${maxTurns})`
 				: agent.state.errorMessage;
 		const result = buildTaskResultFromAgentState({
-			taskId: config.taskId ?? "",
+			taskId: currentAttempt.taskId ?? "",
 			roleName: role.name,
 			messages: agent.state.messages,
 			events,
 			turnsUsed,
 			fallbackError: completionError,
+			attempt: currentAttempt.attempt,
+			attemptMode: currentAttempt.attemptMode,
+			continuedFrom: currentAttempt.continuedFrom,
 		});
 		result.handoffPath = writeTaskHandoff(outputDir, result.taskId || role.name, result);
 		return result;
-	} catch (err) {
-		const parentAborted = parentSignal?.aborted ?? false;
-		const reachedMaxTurns = turnsUsed >= maxTurns;
-		const isAborted = parentAborted || reachedMaxTurns;
-		const error = isAborted
-			? parentAborted
-				? "Parent aborted"
-				: `Agent reached maximum turns (${maxTurns})`
-			: err instanceof Error
-				? err.message
-				: String(err);
-		const result = buildTaskResultFromAgentState({
-			taskId: config.taskId ?? "",
-			roleName: role.name,
-			messages: agent.state.messages,
-			events,
-			turnsUsed,
-			fallbackError: error,
+	};
+
+	return {
+		get messages(): AgentMessage[] {
+			return agent.state.messages;
+		},
+		get turnsUsed(): number {
+			return turnsUsed;
+		},
+		prompt: runPrompt,
+		continueWith: runPrompt,
+		dispose(): void {
+			unsubscribe();
+			if (parentSignal && onParentAbort) {
+				parentSignal.removeEventListener("abort", onParentAbort);
+			}
+		},
+	};
+}
+
+/**
+ * Run a team agent to completion for a specific task.
+ * Follows the bot's runSubAgent pattern with ownership enforcement.
+ */
+export async function runTeamAgent(taskDescription: string, config: TeamAgentConfig): Promise<TaskResult> {
+	const session = createTeamAgentSession(config);
+	try {
+		return await session.prompt(taskDescription, {
+			taskId: config.taskId,
+			attempt: 1,
+			attemptMode: "initial",
 		});
-		result.handoffPath = writeTaskHandoff(outputDir, result.taskId || role.name, result);
-		return result;
 	} finally {
-		unsubscribe();
-		if (parentSignal && onParentAbort) {
-			parentSignal.removeEventListener("abort", onParentAbort);
-		}
+		session.dispose();
 	}
 }

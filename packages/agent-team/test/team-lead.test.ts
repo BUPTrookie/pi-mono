@@ -118,6 +118,71 @@ function parallelPlannerResult(): PlannerResult {
 	return result;
 }
 
+function dependencyPlannerResult(): PlannerResult {
+	return {
+		plan: {
+			id: "dependency-plan",
+			summary: "API with data dependency",
+			roles: [
+				{
+					name: "setup-role",
+					profile: "project-setup",
+					description: "Sets up project",
+					ownedDirectories: ["."],
+				},
+				{
+					name: "data-role",
+					profile: "data-engineer",
+					description: "Builds data layer",
+					ownedDirectories: ["src/db"],
+				},
+				{
+					name: "backend-role",
+					profile: "backend-engineer",
+					description: "Builds backend",
+					ownedDirectories: ["src/server"],
+				},
+			],
+			tasks: [
+				{
+					id: "setup",
+					role: "setup-role",
+					subject: "Setup",
+					description: "Create package.",
+					dependencies: [],
+					ownedDirectories: ["."],
+					expectedOutputs: ["package.json"],
+					acceptanceCriteria: ["package exists"],
+				},
+				{
+					id: "data",
+					role: "data-role",
+					subject: "Data",
+					description: "Create data layer.",
+					dependencies: ["setup"],
+					ownedDirectories: ["src/db"],
+					expectedOutputs: ["src/db/index.js"],
+					acceptanceCriteria: ["data exists"],
+				},
+				{
+					id: "backend",
+					role: "backend-role",
+					subject: "Backend",
+					description: "Create backend.",
+					dependencies: ["data"],
+					ownedDirectories: ["src/server"],
+					expectedOutputs: ["src/server/index.js"],
+					acceptanceCriteria: ["backend exists"],
+				},
+			],
+			contracts: [{ path: "docs/contracts/team-plan.json", kind: "team-plan", required: true }],
+			validationRules: ["Required files exist."],
+		},
+		contracts: { projectManifest: { goal: "Build dependency project", features: ["api"] } },
+		diagnostics: [],
+	};
+}
+
 function controls(): TeamLeadControls {
 	return {
 		waitIfPaused: async () => undefined,
@@ -649,5 +714,70 @@ describe("TeamLead dynamic run", () => {
 		expect(calledTaskIds).toEqual(["build-cli"]);
 		expect(dependent?.success).toBe(false);
 		expect(dependent?.error).toContain("Dependency 'build-cli' did not produce expected output");
+	});
+
+	it("repairs root dependency tasks before rerunning downstream tasks", async () => {
+		const outputDir = tempProject();
+		mkdirSync(outputDir, { recursive: true });
+		const calledTaskIds: string[] = [];
+		let validationRound = 0;
+		const lead = new TeamLead({
+			config: { ...config(outputDir), maxRepairRounds: 1 },
+			model,
+			getApiKey: () => "key",
+			controls: controls(),
+			agentRunner: async (_description, agentConfig) => {
+				const taskId = agentConfig.taskId ?? "";
+				calledTaskIds.push(taskId);
+				if (taskId === "setup") {
+					writeFileSync(
+						join(agentConfig.outputDir, "package.json"),
+						JSON.stringify({ scripts: { start: "node x" } }),
+					);
+				}
+				if (taskId === "repair-1-data") {
+					mkdirSync(join(agentConfig.outputDir, "src", "db"), { recursive: true });
+					writeFileSync(join(agentConfig.outputDir, "src", "db", "index.js"), "export const db = {};", "utf-8");
+				}
+				if (taskId === "repair-1-backend") {
+					mkdirSync(join(agentConfig.outputDir, "src", "server"), { recursive: true });
+					writeFileSync(
+						join(agentConfig.outputDir, "src", "server", "index.js"),
+						"console.log('server')",
+						"utf-8",
+					);
+				}
+				return {
+					taskId,
+					success: true,
+					output: "ok",
+					filesCreated: [],
+					turnsUsed: 1,
+					handoffPath: `docs/agent-team/tasks/${taskId}-handoff.json`,
+				};
+			},
+			plannerRunner: async () => dependencyPlannerResult(),
+			validatorRunner: async () => {
+				validationRound++;
+				return validationRound === 1
+					? [
+							{
+								id: "missing-data-output",
+								severity: "error",
+								message: "Data output missing",
+								ownerTaskId: "data",
+								file: "src/db/index.js",
+							},
+						]
+					: [];
+			},
+		});
+
+		const result = await lead.orchestrate();
+
+		expect(result.success).toBe(true);
+		expect(calledTaskIds).toEqual(["setup", "data", "repair-1-data", "repair-1-backend"]);
+		expect(result.tasks.find((task) => task.taskId === "repair-1-data")?.attemptMode).toBe("continue");
+		expect(result.tasks.find((task) => task.taskId === "repair-1-backend")?.attemptMode).toBe("rerun");
 	});
 });

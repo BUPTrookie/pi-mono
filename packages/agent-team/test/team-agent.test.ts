@@ -5,6 +5,7 @@ import { type AssistantMessage, type AssistantMessageEvent, EventStream, getMode
 import { describe, expect, it } from "vitest";
 import {
 	buildTaskResultFromAgentState,
+	createTeamAgentSession,
 	extractChecksRunFromAgentEvents,
 	runTeamAgent,
 } from "../src/agent/team-agent.js";
@@ -24,6 +25,11 @@ class MockAssistantStream extends EventStream<AssistantMessageEvent, AssistantMe
 			this.push({ type: "done", reason: "stop", message });
 		});
 	}
+}
+
+function streamMessages(texts: string[]): () => MockAssistantStream {
+	let index = 0;
+	return () => new MockAssistantStream(assistantMessage(texts[index++] ?? texts[texts.length - 1] ?? "done"));
 }
 
 function assistantMessage(text: string): AssistantMessage {
@@ -198,5 +204,47 @@ describe("team agent helpers", () => {
 		expect(result.success).toBe(false);
 		expect(result.error).toBe("Agent reached maximum turns (1)");
 		expect(result.turnsUsed).toBe(1);
+	});
+
+	it("continues the same task session with prior messages and attempt metadata", async () => {
+		const role: RoleDefinition = {
+			name: "setup",
+			profile: "project-setup",
+			description: "Setup",
+			systemPrompt: "You are setup.",
+			allowedTools: [],
+			ownedDirectories: ["."],
+			skillHints: [],
+			maxTurns: 10,
+		};
+		const session = createTeamAgentSession({
+			role,
+			model: getModel("openai", "gpt-4o-mini"),
+			outputDir: join(tmpdir(), `agent-team-session-${Date.now()}-${Math.random().toString(36).slice(2)}`),
+			streamFn: streamMessages(["first done", "second done"]),
+			taskId: "setup-project",
+		});
+
+		const first = await session.prompt("Create the project.", {
+			taskId: "setup-project",
+			attempt: 1,
+			attemptMode: "initial",
+		});
+		const second = await session.continueWith("Fix missing package.json.", {
+			taskId: "setup-project",
+			attempt: 2,
+			attemptMode: "continue",
+			continuedFrom: "setup-project",
+		});
+
+		const userMessages = session.messages.filter((message) => message.role === "user");
+		expect(first.attempt).toBe(1);
+		expect(first.attemptMode).toBe("initial");
+		expect(second.attempt).toBe(2);
+		expect(second.attemptMode).toBe("continue");
+		expect(second.continuedFrom).toBe("setup-project");
+		expect(second.turnsUsed).toBe(2);
+		expect(userMessages).toHaveLength(2);
+		expect(userMessages[1]?.content).toEqual([{ type: "text", text: "Fix missing package.json." }]);
 	});
 });

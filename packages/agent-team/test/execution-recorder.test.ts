@@ -28,6 +28,9 @@ const result: TeamResult = {
 			turnsUsed: 2,
 			checksRun: [{ command: "node --check src/index.ts", exitCode: 0, summary: "ok", required: true }],
 			handoffPath: "docs/agent-team/tasks/build_api-handoff.json",
+			attempt: 2,
+			attemptMode: "continue",
+			continuedFrom: "build/api",
 		},
 	],
 	totalTurns: 2,
@@ -120,7 +123,7 @@ describe("execution recorder", () => {
 		expect(JSON.stringify(mainLog)).toContain("secret content");
 		expect(summary).toContain("# Agent Team Run Summary");
 		expect(summary).toContain(
-			"| build/api | success | 2 | src/index.ts | 1 | docs/agent-team/tasks/build_api-handoff.json |  |",
+			"| build/api | success | 2 | continue | build/api | 2 | src/index.ts | 1 | docs/agent-team/tasks/build_api-handoff.json |  |",
 		);
 		expect(summary).toContain("node --check src/index.ts");
 		expect(summary).toContain("warn-1");

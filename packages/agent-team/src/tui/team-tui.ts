@@ -17,6 +17,8 @@ interface TaskViewState {
 	status: "pending" | "running" | "completed" | "failed";
 	dependencies: string[];
 	turns?: number;
+	attempt?: number;
+	attemptMode?: string;
 	files: string[];
 	error?: string;
 	lastMessage?: string;
@@ -114,6 +116,8 @@ export class TeamRunComponent implements Component {
 					status: event.result.success ? "completed" : "failed",
 					dependencies: event.task.dependencies,
 					turns: event.result.turnsUsed,
+					attempt: event.result.attempt,
+					attemptMode: event.result.attemptMode,
 					files: event.result.filesCreated,
 					error: event.result.error,
 				});
@@ -240,7 +244,11 @@ export class TeamRunComponent implements Component {
 	}
 
 	private renderTaskTable(): string[] {
-		const lines = ["", chalk.bold("tasks"), "seq | task | role/profile | status | deps | turns | files | last"];
+		const lines = [
+			"",
+			chalk.bold("tasks"),
+			"seq | task | role/profile | status | attempt | turns | files | deps | last",
+		];
 		const taskRows = [...this.tasks.values()].sort((left, right) => left.order - right.order);
 		if (taskRows.length === 0) {
 			lines.push("_no tasks yet_");
@@ -251,9 +259,11 @@ export class TeamRunComponent implements Component {
 			const role = task.profile ? `${task.role}/${task.profile}` : task.role;
 			const deps = task.dependencies.length > 0 ? task.dependencies.join(",") : "-";
 			const turns = task.turns ?? 0;
+			const attempt =
+				task.attempt !== undefined ? ` | attempt: ${task.attempt}/${task.attemptMode ?? "initial"}` : "";
 			const last = task.error ?? task.lastMessage ?? "-";
 			lines.push(
-				`${task.order} | ${task.id} | ${role} | ${this.colorStatus(task.status)} | ${deps} | turns: ${turns} | files: ${task.files.length} | ${last}`,
+				`${task.order} | ${task.id} | ${role} | ${this.colorStatus(task.status)}${attempt} | turns: ${turns} | files: ${task.files.length} | deps: ${deps} | ${last}`,
 			);
 		}
 		return lines;
@@ -323,6 +333,8 @@ export class TeamRunComponent implements Component {
 			status: patch.status ?? existing?.status ?? "pending",
 			dependencies: patch.dependencies ?? existing?.dependencies ?? [],
 			turns: patch.turns ?? existing?.turns,
+			attempt: patch.attempt ?? existing?.attempt,
+			attemptMode: patch.attemptMode ?? existing?.attemptMode,
 			files: patch.files ?? existing?.files ?? [],
 			error: patch.error ?? existing?.error,
 			lastMessage: patch.lastMessage ?? existing?.lastMessage,

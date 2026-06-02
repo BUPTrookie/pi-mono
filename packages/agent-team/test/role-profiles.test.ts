@@ -28,7 +28,7 @@ describe("role profiles", () => {
 			const profile = getRoleProfile(id);
 			expect(profile?.allowedTools.length).toBeGreaterThan(0);
 			expect(profile?.systemPromptTitle).toContain("Agent");
-			expect(profile?.maxTurns).toBeGreaterThan(0);
+			expect(profile?.maxTurns).toBe(200);
 		}
 		expect(isRoleProfileId("custom-engineer")).toBe(false);
 	});

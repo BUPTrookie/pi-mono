@@ -86,13 +86,13 @@ function formatIssueSummary(result: TeamResult): string {
 }
 
 function formatTaskRows(result: TeamResult): string {
-	if (result.tasks.length === 0) return "| _none_ | _none_ | 0 |  | 0 |  |  |";
+	if (result.tasks.length === 0) return "| _none_ | _none_ | 0 |  |  | 0 |  | 0 |  |  |";
 	return result.tasks
 		.map((task) => {
 			const status = task.success ? "success" : "failed";
 			const files = task.filesCreated.join(", ");
 			const error = task.error ?? "";
-			return `| ${task.taskId} | ${status} | ${task.turnsUsed} | ${files} | ${task.checksRun?.length ?? 0} | ${task.handoffPath ?? ""} | ${error} |`;
+			return `| ${task.taskId} | ${status} | ${task.attempt ?? 1} | ${task.attemptMode ?? "initial"} | ${task.continuedFrom ?? ""} | ${task.turnsUsed} | ${files} | ${task.checksRun?.length ?? 0} | ${task.handoffPath ?? ""} | ${error} |`;
 		})
 		.join("\n");
 }
@@ -135,8 +135,8 @@ function buildSummary(result: TeamResult, state: RecorderState): string {
 		"",
 		"## Tasks",
 		"",
-		"| Task | Status | Turns | Files | Checks | Handoff | Error |",
-		"| --- | --- | ---: | --- | ---: | --- | --- |",
+		"| Task | Status | Attempt | Mode | Continued From | Turns | Files | Checks | Handoff | Error |",
+		"| --- | --- | ---: | --- | --- | ---: | --- | ---: | --- | --- |",
 		formatTaskRows(result),
 		"",
 		"## Checks Run",

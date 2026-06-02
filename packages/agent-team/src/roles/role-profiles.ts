@@ -32,7 +32,7 @@ const ROLE_PROFILES: Record<RoleProfileId, RoleProfile> = {
 		systemPromptTitle: "Project Setup Agent",
 		description: "Creates package metadata, project structure, scripts, configuration, and README foundations.",
 		allowedTools: FULL_TOOLSET,
-		maxTurns: 30,
+		maxTurns: 200,
 		skillHints: ["project scaffolding", "package scripts", "configuration hygiene"],
 		instructions: [
 			"Create the smallest useful project skeleton that downstream agents can build on.",
@@ -45,7 +45,7 @@ const ROLE_PROFILES: Record<RoleProfileId, RoleProfile> = {
 		systemPromptTitle: "Backend Engineering Agent",
 		description: "Implements APIs, server behavior, routing, and backend business logic.",
 		allowedTools: FULL_TOOLSET,
-		maxTurns: 40,
+		maxTurns: 200,
 		skillHints: ["API implementation", "server architecture", "contract alignment"],
 		instructions: [
 			"Implement backend behavior exactly from OpenAPI and project contracts when they exist.",
@@ -58,7 +58,7 @@ const ROLE_PROFILES: Record<RoleProfileId, RoleProfile> = {
 		systemPromptTitle: "Data Engineering Agent",
 		description: "Implements schemas, persistence adapters, seed data, and domain data flows.",
 		allowedTools: FULL_TOOLSET,
-		maxTurns: 35,
+		maxTurns: 200,
 		skillHints: ["data modeling", "persistence", "migration-free local storage"],
 		instructions: [
 			"Follow data-model contracts exactly when present.",
@@ -71,7 +71,7 @@ const ROLE_PROFILES: Record<RoleProfileId, RoleProfile> = {
 		systemPromptTitle: "Frontend Engineering Agent",
 		description: "Implements UI, client state, app shell, and browser-facing behavior.",
 		allowedTools: FULL_TOOLSET,
-		maxTurns: 40,
+		maxTurns: 200,
 		skillHints: ["frontend implementation", "client integration", "responsive UI checks"],
 		instructions: [
 			"Implement user-facing flows from the project manifest and API contracts.",
@@ -84,7 +84,7 @@ const ROLE_PROFILES: Record<RoleProfileId, RoleProfile> = {
 		systemPromptTitle: "Test Engineering Agent",
 		description: "Writes unit and integration tests for specific modules or contracts.",
 		allowedTools: FULL_TOOLSET,
-		maxTurns: 35,
+		maxTurns: 200,
 		thinkingLevelOverride: "low",
 		skillHints: ["unit testing", "integration testing", "regression coverage"],
 		instructions: [
@@ -98,7 +98,7 @@ const ROLE_PROFILES: Record<RoleProfileId, RoleProfile> = {
 		systemPromptTitle: "End-to-End Verification Agent",
 		description: "Runs final project-level validation across completed implementation and writes the E2E report.",
 		allowedTools: READ_AND_CHECK_TOOLS,
-		maxTurns: 30,
+		maxTurns: 200,
 		thinkingLevelOverride: "medium",
 		skillHints: ["end-to-end testing", "acceptance verification", "delivery review"],
 		instructions: [
@@ -115,7 +115,7 @@ const ROLE_PROFILES: Record<RoleProfileId, RoleProfile> = {
 		systemPromptTitle: "Documentation Agent",
 		description: "Writes usage documentation, handoff notes, and project-facing docs.",
 		allowedTools: DOCS_TOOLSET,
-		maxTurns: 25,
+		maxTurns: 200,
 		skillHints: ["technical writing", "handoff documentation", "usage instructions"],
 		instructions: [
 			"Document what was built and how to run or validate it.",

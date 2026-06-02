@@ -61,6 +61,8 @@ export interface TaskSpec {
 	expectedOutputs: string[];
 	acceptanceCriteria: string[];
 	repairOf?: string[];
+	attemptMode?: TaskAttemptMode;
+	continuedFrom?: string;
 }
 
 export interface TeamPlan {
@@ -104,6 +106,7 @@ export type PlannerRunner = (options: PlannerOptions) => Promise<PlannerResult>;
 // --- Task types ---
 
 export type TaskStatus = "pending" | "in_progress" | "completed" | "failed";
+export type TaskAttemptMode = "initial" | "continue" | "rerun";
 
 export interface Task {
 	id: string;
@@ -116,6 +119,8 @@ export interface Task {
 	expectedOutputs: string[];
 	acceptanceCriteria: string[];
 	repairOf?: string[];
+	attemptMode?: TaskAttemptMode;
+	continuedFrom?: string;
 }
 
 export interface TaskResult {
@@ -127,6 +132,9 @@ export interface TaskResult {
 	turnsUsed: number;
 	checksRun?: TaskCheckResult[];
 	handoffPath?: string;
+	attempt?: number;
+	attemptMode?: TaskAttemptMode;
+	continuedFrom?: string;
 }
 
 export interface TaskCheckResult {

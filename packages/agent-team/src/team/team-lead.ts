@@ -2,7 +2,12 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Api, Model } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
-import { runTeamAgent, type TeamAgentConfig } from "../agent/team-agent.js";
+import {
+	createTeamAgentSession,
+	runTeamAgent,
+	type TeamAgentConfig,
+	type TeamAgentSession,
+} from "../agent/team-agent.js";
 import { TaskGraph } from "../task/task-graph.js";
 import { TaskScheduler } from "../task/task-scheduler.js";
 import type {
@@ -229,6 +234,8 @@ export class TeamLead {
 	private plannerRunner: PlannerRunner;
 	private validatorRunner: TeamValidatorRunner;
 	private supervisorRunner: SupervisorRunner;
+	private taskSessions = new Map<string, TeamAgentSession>();
+	private taskAttempts = new Map<string, number>();
 
 	constructor(dependencies: TeamLeadDependencies);
 	constructor(
@@ -281,7 +288,32 @@ export class TeamLead {
 		this.abortController.abort();
 	}
 
+	private originalTaskId(task: Task): string {
+		return task.continuedFrom ?? task.id;
+	}
+
+	private nextAttempt(originalTaskId: string): number {
+		const next = (this.taskAttempts.get(originalTaskId) ?? 0) + 1;
+		this.taskAttempts.set(originalTaskId, next);
+		return next;
+	}
+
 	async orchestrate(): Promise<TeamResult> {
+		try {
+			return await this.orchestrateRun();
+		} finally {
+			this.disposeTaskSessions();
+		}
+	}
+
+	private disposeTaskSessions(): void {
+		for (const session of this.taskSessions.values()) {
+			session.dispose();
+		}
+		this.taskSessions.clear();
+	}
+
+	private async orchestrateRun(): Promise<TeamResult> {
 		const { outputDir, requirement } = this.config;
 		const signal = this.abortController.signal;
 		const maxRepairRounds = this.config.maxRepairRounds ?? 2;
@@ -432,6 +464,49 @@ export class TeamLead {
 		};
 		this.emitEvent({ type: "run_end", result, timestamp: now() });
 		return result;
+	}
+
+	private async runAgentAttempt(task: Task, description: string, agentConfig: TeamAgentConfig): Promise<TaskResult> {
+		const originalTaskId = this.originalTaskId(task);
+		const attempt = this.nextAttempt(originalTaskId);
+		const attemptMode = task.attemptMode ?? (attempt === 1 ? "initial" : "continue");
+		const continuedFrom = task.continuedFrom ?? (attemptMode === "initial" ? undefined : originalTaskId);
+		if (attemptMode !== "initial") {
+			this.emitEvent({
+				type: "task_progress",
+				taskId: task.id,
+				message: `${attemptMode} task ${originalTaskId}: attempt ${attempt}`,
+				timestamp: now(),
+			});
+		}
+
+		if (this.agentRunner !== runTeamAgent) {
+			const result = await this.agentRunner(description, agentConfig);
+			return { ...result, attempt, attemptMode, continuedFrom };
+		}
+
+		let session = this.taskSessions.get(originalTaskId);
+		if (!session) {
+			session = createTeamAgentSession(agentConfig);
+			this.taskSessions.set(originalTaskId, session);
+		}
+		return attemptMode === "initial"
+			? session.prompt(description, {
+					taskId: task.id,
+					attempt,
+					attemptMode,
+					continuedFrom,
+					onAgentEvent: agentConfig.onAgentEvent,
+					onTaskProgress: agentConfig.onTaskProgress,
+				})
+			: session.continueWith(description, {
+					taskId: task.id,
+					attempt,
+					attemptMode,
+					continuedFrom,
+					onAgentEvent: agentConfig.onAgentEvent,
+					onTaskProgress: agentConfig.onTaskProgress,
+				});
 	}
 
 	private emitEvent(event: TeamEvent): void {
@@ -588,7 +663,7 @@ export class TeamLead {
 					this.controls.getInterventions(),
 					this.config.executionMode ?? "open",
 				);
-				const result = await this.agentRunner(description, agentConfig);
+				const result = await this.runAgentAttempt(task, description, agentConfig);
 				result.taskId = task.id;
 				return { task, result };
 			});
