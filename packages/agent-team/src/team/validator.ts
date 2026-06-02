@@ -404,6 +404,54 @@ function ownerForApiImplementation(plan: TeamPlan): Pick<ValidationIssue, "owner
 	return { ownerRole: apiTask?.role, ownerTaskId: apiTask?.id };
 }
 
+function findTaskById(plan: TeamPlan, taskId: string): TeamPlan["tasks"][number] | undefined {
+	return plan.tasks.find((task) => task.id === taskId);
+}
+
+function keyValueFromReport(reportText: string, keys: string[]): string | undefined {
+	const keyPattern = keys.map((key) => key.replace(/\s+/g, "\\s*")).join("|");
+	const match = new RegExp(`^\\s*(?:${keyPattern})\\s*:\\s*(.+?)\\s*$`, "im").exec(reportText);
+	return match?.[1]?.trim();
+}
+
+function acceptanceStatusFromReport(reportText: string): "pass" | "fail" | undefined {
+	const value = keyValueFromReport(reportText, ["acceptance status", "acceptanceStatus"]);
+	if (!value) return undefined;
+	if (/^(?:pass|passed|success|ok)\b/i.test(value)) return "pass";
+	if (/^(?:fail|failed|failure|error)\b/i.test(value)) return "fail";
+	return undefined;
+}
+
+function e2eFailureIssue(plan: TeamPlan, task: TeamPlan["tasks"][number], reportPath: string, reportText: string) {
+	const suspectedOwnerTaskId = keyValueFromReport(reportText, [
+		"suspected owner task id",
+		"suspected owner task",
+		"suspectedOwnerTaskId",
+	]);
+	const suspectedFile = keyValueFromReport(reportText, ["suspected file", "suspectedFile"]);
+	const evidence = keyValueFromReport(reportText, ["evidence"]) ?? keyValueFromReport(reportText, ["observed result"]);
+	const ownerTask = suspectedOwnerTaskId ? findTaskById(plan, suspectedOwnerTaskId) : undefined;
+	const ownerTaskId = ownerTask?.id ?? task.id;
+	const routed = ownerTask !== undefined || suspectedFile !== undefined;
+	const routeLabel = routed ? (ownerTask?.id ?? suspectedFile ?? task.id) : task.id;
+	return issue(
+		`e2e-acceptance-failed-${task.id}`,
+		routed
+			? `e2e failed -> routed to ${routeLabel}: ${evidence ?? "Acceptance status failed."}`
+			: `E2E acceptance failed and needs semantic routing: ${evidence ?? "Acceptance status failed."}`,
+		{
+			severity: "error",
+			ownerRole: ownerTask?.role ?? task.role,
+			ownerTaskId,
+			file: suspectedFile ?? reportPath,
+			source: "e2e",
+			routedFromTaskId: task.id,
+			needsSemanticRouting: !routed,
+			evidence,
+		},
+	);
+}
+
 function commandLabel(spec: CommandSpec): string {
 	return [spec.command, ...spec.args].join(" ");
 }
@@ -634,22 +682,36 @@ export function validateTeamOutput(outputDir: string, plan: TeamPlan): Validatio
 		if (!existsOutput(outputDir, reportPath)) continue;
 		let reportText = "";
 		try {
-			reportText = readFileSync(join(outputDir, reportPath), "utf-8").toLowerCase();
+			reportText = readFileSync(join(outputDir, reportPath), "utf-8");
 		} catch {
 			continue;
 		}
-		const hasCommands = /\bcommands?\b/.test(reportText);
-		const hasExitStatus = /\b(exit\s+status|exit\s+code|status)\b/.test(reportText);
-		const hasObservedResult = /\bobserved\s+result\b/.test(reportText);
-		const hasAcceptanceStatus = /\bacceptance\s+status\b/.test(reportText);
-		if (!hasCommands || !hasExitStatus || !hasObservedResult || !hasAcceptanceStatus) {
+		const lowerReportText = reportText.toLowerCase();
+		const hasCommands = /\bcommands?\b/.test(lowerReportText);
+		const hasExitStatus = /\b(exit\s+status|exit\s+code|status)\b/.test(lowerReportText);
+		const hasObservedResult = /\bobserved\s+result\b/.test(lowerReportText);
+		const hasAcceptanceStatus = /\bacceptance\s+status\b/.test(lowerReportText);
+		const hasEvidence = /\bevidence\b/.test(lowerReportText);
+		const acceptanceStatus = acceptanceStatusFromReport(reportText);
+		if (
+			!hasCommands ||
+			!hasExitStatus ||
+			!hasObservedResult ||
+			!hasAcceptanceStatus ||
+			!hasEvidence ||
+			!acceptanceStatus
+		) {
 			issues.push(
 				issue(
 					`incomplete-e2e-report-${task.id}`,
-					`E2E report ${reportPath} must include commands, exit status, observed result, and acceptance status.`,
+					`E2E report ${reportPath} must include commands, exit status, observed result, acceptance status PASS or FAIL, and evidence.`,
 					{ severity: "error", ownerRole: task.role, ownerTaskId: task.id, file: reportPath },
 				),
 			);
+			continue;
+		}
+		if (acceptanceStatus === "fail") {
+			issues.push(e2eFailureIssue(plan, task, reportPath, reportText));
 		}
 	}
 

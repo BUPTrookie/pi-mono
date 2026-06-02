@@ -502,6 +502,10 @@ function isCascadeDependencyIssue(issue: ValidationIssue): boolean {
 	return /Dependency '.+' (?:failed|did not produce expected output)/i.test(issue.message);
 }
 
+function isUnroutedE2eIssue(issue: ValidationIssue): boolean {
+	return issue.source === "e2e" && issue.needsSemanticRouting === true;
+}
+
 function taskDependsOn(plan: TeamPlan, taskId: string, dependencyId: string): boolean {
 	const byId = new Map(plan.tasks.map((task) => [task.id, task]));
 	const queue = [...(byId.get(taskId)?.dependencies ?? [])];
@@ -531,6 +535,7 @@ export function createRepairTasks(plan: TeamPlan, issues: ValidationIssue[], rou
 	const grouped = new Map<string, ValidationIssue[]>();
 	for (const issue of issues.filter((item) => item.severity === "error")) {
 		if (isCascadeDependencyIssue(issue)) continue;
+		if (isUnroutedE2eIssue(issue)) continue;
 		const ownerByFile = issue.file !== undefined ? findTaskOwnerForFile(plan, issue.file) : undefined;
 		const fallback = plan.tasks[0]?.id;
 		const key = issue.ownerTaskId ?? ownerByFile ?? issue.ownerRole ?? fallback;

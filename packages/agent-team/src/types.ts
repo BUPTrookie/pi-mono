@@ -145,6 +145,7 @@ export interface TaskCheckResult {
 }
 
 export type ValidationSeverity = "error" | "warning" | "info";
+export type ValidationIssueSource = "validator" | "task" | "supervisor" | "e2e";
 
 export type SupervisorCheckpoint = "plan_created" | "task_end" | "validation_end" | "final_review";
 export type SupervisorDecisionKind = "accept" | "warn" | "request_repair" | "request_human";
@@ -156,6 +157,10 @@ export interface ValidationIssue {
 	ownerRole?: AgentRoleName;
 	ownerTaskId?: string;
 	file?: string;
+	source?: ValidationIssueSource;
+	routedFromTaskId?: string;
+	needsSemanticRouting?: boolean;
+	evidence?: string;
 }
 
 export interface SupervisorDecision {

@@ -109,7 +109,7 @@ export function mergeConfig(
 		thinkingLevel: cliOptions?.thinkingLevel ?? fileConfig?.thinkingLevel,
 		maxRepairRounds: cliOptions?.maxRepairRounds ?? fileConfig?.maxRepairRounds,
 		interventionMode: cliOptions?.interventionMode ?? fileConfig?.interventionMode,
-		supervisionMode: cliOptions?.supervisionMode ?? fileConfig?.supervisionMode,
+		supervisionMode: cliOptions?.supervisionMode ?? fileConfig?.supervisionMode ?? "milestone",
 		permissionMode: cliOptions?.permissionMode ?? fileConfig?.permissionMode ?? "open",
 		executionMode: cliOptions?.executionMode ?? fileConfig?.executionMode ?? "open",
 		approvalPolicy: cliOptions?.approvalPolicy ?? fileConfig?.approvalPolicy ?? "minimal",

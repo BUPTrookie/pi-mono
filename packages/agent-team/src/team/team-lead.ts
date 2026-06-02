@@ -152,14 +152,33 @@ function hasBlockingIssues(issues: ValidationIssue[]): boolean {
 	return issues.some((issue) => issue.severity === "error");
 }
 
-function issuesFromTaskFailures(results: TaskResult[]): ValidationIssue[] {
+function isE2eTask(plan: TeamPlan, taskId: string): boolean {
+	const task = plan.tasks.find((item) => item.id === taskId);
+	if (!task) return false;
+	const role = plan.roles.find((item) => item.name === task.role);
+	return role?.profile === "e2e-verifier";
+}
+
+function hasRoutedE2eIssue(issues: ValidationIssue[], taskId: string): boolean {
+	return issues.some(
+		(issue) => issue.source === "e2e" && issue.routedFromTaskId === taskId && issue.needsSemanticRouting !== true,
+	);
+}
+
+function issuesFromTaskFailures(
+	results: TaskResult[],
+	plan: TeamPlan,
+	validatorIssues: ValidationIssue[] = [],
+): ValidationIssue[] {
 	return results
 		.filter((result) => !result.success)
+		.filter((result) => !(isE2eTask(plan, result.taskId) && hasRoutedE2eIssue(validatorIssues, result.taskId)))
 		.map((result) => ({
 			id: `task-failed-${result.taskId}`,
 			severity: "error" as const,
 			message: `Task ${result.taskId} failed: ${result.error ?? "Unknown agent failure"}`,
 			ownerTaskId: result.taskId,
+			source: "task" as const,
 		}));
 }
 
@@ -366,9 +385,10 @@ export class TeamLead {
 			totalTurns += runResult.turns;
 
 			this.emitEvent({ type: "validation_start", round, timestamp: now() });
+			const validatorIssues = await this.validatorRunner(outputDir, plan, signal);
 			let issues = [
-				...issuesFromTaskFailures(runResult.results),
-				...(await this.validatorRunner(outputDir, plan, signal)),
+				...issuesFromTaskFailures(runResult.results, plan, validatorIssues),
+				...validatorIssues,
 				...this.supervisorIssues,
 			];
 			this.supervisorIssues = [];

@@ -36,6 +36,7 @@ export interface SupervisorContext {
 	task?: TaskSpec | Task;
 	taskResult?: Omit<TaskResult, "output"> & { outputSummary?: string };
 	contracts: Array<{ path: string; content: string }>;
+	e2eReports: Array<{ taskId: string; path: string; content: string }>;
 	handoffs: Array<{ path: string; content: unknown }>;
 	changedFiles: Array<{ path: string; content: string }>;
 	truncationWarnings: string[];
@@ -91,6 +92,16 @@ function parseIssue(value: unknown, index: number): ValidationIssue {
 		ownerRole: typeof value.ownerRole === "string" ? value.ownerRole : undefined,
 		ownerTaskId: typeof value.ownerTaskId === "string" ? value.ownerTaskId : undefined,
 		file: typeof value.file === "string" ? value.file : undefined,
+		source:
+			value.source === "e2e" ||
+			value.source === "supervisor" ||
+			value.source === "task" ||
+			value.source === "validator"
+				? value.source
+				: undefined,
+		routedFromTaskId: typeof value.routedFromTaskId === "string" ? value.routedFromTaskId : undefined,
+		needsSemanticRouting: typeof value.needsSemanticRouting === "boolean" ? value.needsSemanticRouting : undefined,
+		evidence: typeof value.evidence === "string" ? value.evidence : undefined,
 	};
 }
 
@@ -187,6 +198,14 @@ export function buildSupervisorContext(input: SupervisorContextInput): Superviso
 		path: contract.path,
 		content: readContract(input.outputDir, contract.path, input.cache),
 	}));
+	const rolesByName = new Map(input.plan.roles.map((role) => [role.name, role]));
+	const e2eReports = input.plan.tasks
+		.filter((task) => rolesByName.get(task.role)?.profile === "e2e-verifier")
+		.map((task) => {
+			const path = task.expectedOutputs.find((output) => output.endsWith("e2e-report.md")) ?? "docs/e2e-report.md";
+			return { taskId: task.id, path, content: readText(join(input.outputDir, path)) };
+		})
+		.filter((report) => report.content.length > 0);
 	const taskIds = new Set<string>();
 	if (input.task?.id) taskIds.add(input.task.id);
 	for (const result of input.allTaskResults) taskIds.add(result.taskId);
@@ -236,6 +255,7 @@ export function buildSupervisorContext(input: SupervisorContextInput): Superviso
 		task: input.task,
 		taskResult: input.taskResult ? summarizeTaskResult(input.taskResult) : undefined,
 		contracts,
+		e2eReports,
 		handoffs,
 		changedFiles,
 		truncationWarnings,
@@ -251,6 +271,7 @@ function supervisorPrompt(context: SupervisorContext): string {
 You do not implement code. You review the run using facts from contracts, files, handoffs, checks, events, and validator issues.
 Do not trust worker prose alone. Prefer concrete changed files, handoff JSON, checksRun, expected outputs, and validation issues.
 If truncationWarnings is non-empty, account for the missing or partial facts in your confidence and request human input when that prevents a safe judgment.
+For e2e failures, separate test harness/report defects from upstream implementation defects. If an e2e report shows acceptanceStatus FAIL because backend/data/frontend behavior is wrong, route request_repair to the responsible upstream task or file, not to the e2e-verifier. Route to e2e only when the test script, startup command, assertion, or report itself is wrong.
 
 Return ONLY valid JSON:
 {

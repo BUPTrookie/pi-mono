@@ -57,6 +57,48 @@ function plannerResult(): PlannerResult {
 	};
 }
 
+function e2ePlannerResult(): PlannerResult {
+	const result = plannerResult();
+	result.plan.roles = [
+		{
+			name: "backend",
+			profile: "backend-engineer",
+			description: "Builds API",
+			ownedDirectories: ["src/server"],
+		},
+		{
+			name: "e2e",
+			profile: "e2e-verifier",
+			description: "Verifies delivery",
+			ownedDirectories: ["docs/e2e-report.md", "tests/e2e"],
+		},
+	];
+	result.plan.tasks = [
+		{
+			id: "backend",
+			role: "backend",
+			subject: "Build backend",
+			description: "Build backend API",
+			dependencies: [],
+			ownedDirectories: ["src/server"],
+			expectedOutputs: ["src/server/index.js"],
+			acceptanceCriteria: ["API works"],
+		},
+		{
+			id: "e2e",
+			role: "e2e",
+			subject: "Verify",
+			description: "Verify delivery",
+			dependencies: ["backend"],
+			ownedDirectories: ["docs/e2e-report.md", "tests/e2e"],
+			expectedOutputs: ["docs/e2e-report.md"],
+			acceptanceCriteria: ["E2E passes"],
+		},
+	];
+	result.plan.contracts = [];
+	return result;
+}
+
 function writeHandoff(
 	outputDir: string,
 	taskId = "task-api",
@@ -386,6 +428,87 @@ describe("validator", () => {
 		const issues = validateTeamOutput(outputDir, result.plan);
 
 		expect(issues.some((issue) => issue.id === "incomplete-e2e-report-e2e-task")).toBe(true);
+	});
+
+	it("reports e2e acceptance failures as blocking issues", () => {
+		const outputDir = tempProject();
+		mkdirSync(join(outputDir, "docs"), { recursive: true });
+		mkdirSync(join(outputDir, "src", "server"), { recursive: true });
+		const result = e2ePlannerResult();
+		writeFileSync(join(outputDir, "src/server/index.js"), "console.log('server')", "utf-8");
+		writeFileSync(
+			join(outputDir, "docs/e2e-report.md"),
+			[
+				"# E2E",
+				"Command: curl http://127.0.0.1:3000/api/notes",
+				"Exit status: 0",
+				"Observed result: HTTP 500 from backend route.",
+				"Acceptance status: FAIL",
+				"Evidence: expected 200 but got 500.",
+			].join("\n"),
+			"utf-8",
+		);
+
+		const issues = validateTeamOutput(outputDir, result.plan);
+
+		const e2eIssue = issues.find((issue) => issue.id === "e2e-acceptance-failed-e2e");
+		expect(e2eIssue?.severity).toBe("error");
+		expect(e2eIssue?.ownerTaskId).toBe("e2e");
+		expect(e2eIssue?.needsSemanticRouting).toBe(true);
+	});
+
+	it("routes e2e acceptance failures to suspected owner when the report provides one", () => {
+		const outputDir = tempProject();
+		mkdirSync(join(outputDir, "docs"), { recursive: true });
+		mkdirSync(join(outputDir, "src", "server"), { recursive: true });
+		const result = e2ePlannerResult();
+		writeFileSync(join(outputDir, "src/server/index.js"), "console.log('server')", "utf-8");
+		writeFileSync(
+			join(outputDir, "docs/e2e-report.md"),
+			[
+				"# E2E",
+				"Command: curl http://127.0.0.1:3000/api/notes",
+				"Exit code: 0",
+				"Observed result: HTTP 500 from backend route.",
+				"Acceptance status: FAIL",
+				"Suspected owner task id: backend",
+				"Suspected file: src/server/index.js",
+				"Evidence: backend route returns 500 for valid request.",
+			].join("\n"),
+			"utf-8",
+		);
+
+		const issues = validateTeamOutput(outputDir, result.plan);
+
+		const e2eIssue = issues.find((issue) => issue.id === "e2e-acceptance-failed-e2e");
+		expect(e2eIssue?.ownerTaskId).toBe("backend");
+		expect(e2eIssue?.file).toBe("src/server/index.js");
+		expect(e2eIssue?.message).toContain("e2e failed -> routed to backend");
+		expect(e2eIssue?.needsSemanticRouting).toBe(false);
+	});
+
+	it("does not report e2e acceptance failures when the report passes", () => {
+		const outputDir = tempProject();
+		mkdirSync(join(outputDir, "docs"), { recursive: true });
+		mkdirSync(join(outputDir, "src", "server"), { recursive: true });
+		const result = e2ePlannerResult();
+		writeFileSync(join(outputDir, "src/server/index.js"), "console.log('server')", "utf-8");
+		writeFileSync(
+			join(outputDir, "docs/e2e-report.md"),
+			[
+				"# E2E",
+				"Command: curl http://127.0.0.1:3000/api/notes",
+				"Exit status: 0",
+				"Observed result: HTTP 200 with notes payload.",
+				"Acceptance status: PASS",
+				"Evidence: user workflow completed.",
+			].join("\n"),
+			"utf-8",
+		);
+
+		const issues = validateTeamOutput(outputDir, result.plan);
+
+		expect(issues.some((issue) => issue.id === "e2e-acceptance-failed-e2e")).toBe(false);
 	});
 
 	it("routes package and OpenAPI validation issues to dynamic task owners", () => {

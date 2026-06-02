@@ -235,6 +235,7 @@ describe("TeamLead dynamic run", () => {
 						"Exit status: 0",
 						"Observed result: CLI formats JSON.",
 						"Acceptance status: pass",
+						"Evidence: CLI command completed successfully.",
 					].join("\n"),
 					"utf-8",
 				);
@@ -779,5 +780,152 @@ describe("TeamLead dynamic run", () => {
 		expect(calledTaskIds).toEqual(["setup", "data", "repair-1-data", "repair-1-backend"]);
 		expect(result.tasks.find((task) => task.taskId === "repair-1-data")?.attemptMode).toBe("continue");
 		expect(result.tasks.find((task) => task.taskId === "repair-1-backend")?.attemptMode).toBe("rerun");
+	});
+
+	it("repairs upstream owner tasks when e2e reports a routed acceptance failure", async () => {
+		const outputDir = tempProject();
+		mkdirSync(outputDir, { recursive: true });
+		const calledTaskIds: string[] = [];
+		let validationRound = 0;
+		const lead = new TeamLead({
+			config: { ...config(outputDir), maxRepairRounds: 1 },
+			model,
+			getApiKey: () => "key",
+			controls: controls(),
+			agentRunner: async (_description, agentConfig) => {
+				const taskId = agentConfig.taskId ?? "";
+				calledTaskIds.push(taskId);
+				if (taskId === "build-cli" || taskId === "repair-1-build-cli") {
+					mkdirSync(join(agentConfig.outputDir, "src"), { recursive: true });
+					writeFileSync(join(agentConfig.outputDir, "src/index.js"), "console.log('cli')", "utf-8");
+					writeFileSync(
+						join(agentConfig.outputDir, "package.json"),
+						JSON.stringify({ scripts: { start: "node src/index.js" } }),
+						"utf-8",
+					);
+					writeFileSync(join(agentConfig.outputDir, "README.md"), "# CLI\n", "utf-8");
+				}
+				return {
+					taskId,
+					success: true,
+					output: "ok",
+					filesCreated: [],
+					turnsUsed: 1,
+					handoffPath: `docs/agent-team/tasks/${taskId}-handoff.json`,
+				};
+			},
+			plannerRunner: async () => plannerResult(),
+			validatorRunner: async () => {
+				validationRound++;
+				return validationRound === 1
+					? [
+							{
+								id: "e2e-acceptance-failed-verify-e2e",
+								severity: "error",
+								message: "e2e failed -> routed to build-cli: HTTP 500 from CLI workflow.",
+								ownerTaskId: "build-cli",
+								file: "src/index.js",
+								source: "e2e",
+								routedFromTaskId: "verify-e2e",
+								evidence: "HTTP 500",
+							},
+						]
+					: [];
+			},
+		});
+
+		const result = await lead.orchestrate();
+
+		expect(result.success).toBe(true);
+		expect(calledTaskIds).toEqual(["build-cli", "verify-e2e", "repair-1-build-cli", "repair-1-verify-e2e"]);
+		expect(result.tasks.find((task) => task.taskId === "repair-1-build-cli")?.attemptMode).toBe("continue");
+		expect(result.tasks.find((task) => task.taskId === "repair-1-verify-e2e")?.attemptMode).toBe("rerun");
+	});
+
+	it("uses supervisor routing for unowned e2e failures instead of repairing e2e as the root task", async () => {
+		const outputDir = tempProject();
+		mkdirSync(outputDir, { recursive: true });
+		const calledTaskIds: string[] = [];
+		let validationRound = 0;
+		const lead = new TeamLead({
+			config: { ...config(outputDir), supervisionMode: "milestone", maxRepairRounds: 1 },
+			model,
+			getApiKey: () => "key",
+			controls: controls(),
+			agentRunner: async (_description, agentConfig) => {
+				const taskId = agentConfig.taskId ?? "";
+				calledTaskIds.push(taskId);
+				if (taskId === "build-cli" || taskId === "repair-1-build-cli") {
+					mkdirSync(join(agentConfig.outputDir, "src"), { recursive: true });
+					writeFileSync(join(agentConfig.outputDir, "src/index.js"), "console.log('cli')", "utf-8");
+					writeFileSync(
+						join(agentConfig.outputDir, "package.json"),
+						JSON.stringify({ scripts: { start: "node src/index.js" } }),
+						"utf-8",
+					);
+					writeFileSync(join(agentConfig.outputDir, "README.md"), "# CLI\n", "utf-8");
+				}
+				return {
+					taskId,
+					success: true,
+					output: "ok",
+					filesCreated: [],
+					turnsUsed: 1,
+					handoffPath: `docs/agent-team/tasks/${taskId}-handoff.json`,
+				};
+			},
+			plannerRunner: async () => plannerResult(),
+			validatorRunner: async () => {
+				validationRound++;
+				return validationRound === 1
+					? [
+							{
+								id: "e2e-acceptance-failed-verify-e2e",
+								severity: "error",
+								message: "E2E acceptance failed and needs semantic routing: HTTP 500.",
+								ownerTaskId: "verify-e2e",
+								file: "docs/e2e-report.md",
+								source: "e2e",
+								needsSemanticRouting: true,
+								evidence: "HTTP 500",
+							},
+						]
+					: [];
+			},
+			supervisorRunner: async (checkpoint, context) => ({
+				checkpoint,
+				decision:
+					checkpoint === "validation_end" && context.validationIssues.length > 0 ? "request_repair" : "accept",
+				summary:
+					checkpoint === "validation_end" && context.validationIssues.length > 0
+						? "Route e2e HTTP 500 to build task"
+						: "ok",
+				issues:
+					checkpoint === "validation_end" && context.validationIssues.length > 0
+						? [
+								{
+									id: "supervisor-route-e2e-backend",
+									severity: "error",
+									message: "e2e failed -> routed to build-cli: CLI route returned HTTP 500.",
+									ownerTaskId: "build-cli",
+									file: "src/index.js",
+									source: "e2e",
+									routedFromTaskId: "verify-e2e",
+									evidence: "HTTP 500",
+								},
+							]
+						: [],
+				recommendedActions:
+					checkpoint === "validation_end" && context.validationIssues.length > 0
+						? ["Repair build-cli, then rerun e2e"]
+						: [],
+			}),
+		});
+
+		const result = await lead.orchestrate();
+
+		expect(result.success).toBe(true);
+		expect(calledTaskIds).toEqual(["build-cli", "verify-e2e", "repair-1-build-cli", "repair-1-verify-e2e"]);
+		expect(calledTaskIds).not.toContain("repair-1-verify-e2e-root");
 	});
 });

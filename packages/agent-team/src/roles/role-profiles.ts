@@ -107,7 +107,8 @@ const ROLE_PROFILES: Record<RoleProfileId, RoleProfile> = {
 			"For CLIs: run with sample inputs and verify the output matches expectations.",
 			"Run npm test (or equivalent) and report exit code and any failures.",
 			"Do not write ordinary unit tests; unit and module tests belong to implementation or test-engineer tasks.",
-			"Write docs/e2e-report.md with every command you ran, actual observed output, remaining risks, and acceptance status.",
+			"Write docs/e2e-report.md with every scenario command, exit code or status, observed result, evidence, and acceptance status as PASS or FAIL.",
+			"If a workflow fails because upstream implementation is wrong, report suspectedOwnerTaskId or suspectedFile when you can infer it, but do not fix business code yourself.",
 		],
 	},
 	"docs-engineer": {

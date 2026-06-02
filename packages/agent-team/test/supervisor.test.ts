@@ -37,6 +37,39 @@ function plan(): TeamPlan {
 	};
 }
 
+function e2ePlan(): TeamPlan {
+	const base = plan();
+	return {
+		...base,
+		roles: [
+			{ name: "backend", profile: "backend-engineer", description: "Builds API", ownedDirectories: ["src"] },
+			{ name: "e2e", profile: "e2e-verifier", description: "Verifies", ownedDirectories: ["docs"] },
+		],
+		tasks: [
+			{
+				id: "backend",
+				role: "backend",
+				subject: "Build API",
+				description: "Build API",
+				dependencies: [],
+				ownedDirectories: ["src"],
+				expectedOutputs: ["src/index.js"],
+				acceptanceCriteria: ["API works"],
+			},
+			{
+				id: "e2e",
+				role: "e2e",
+				subject: "Verify E2E",
+				description: "Verify API",
+				dependencies: ["backend"],
+				ownedDirectories: ["docs"],
+				expectedOutputs: ["docs/e2e-report.md"],
+				acceptanceCriteria: ["Report E2E"],
+			},
+		],
+	};
+}
+
 describe("supervisor", () => {
 	it("parses strict supervisor JSON decisions", () => {
 		const decision = parseSupervisorDecision(`{
@@ -132,6 +165,46 @@ describe("supervisor", () => {
 		expect(JSON.stringify(context.handoffs)).toContain("node --check src/index.js");
 		expect(JSON.stringify(context.changedFiles)).toContain("console.log");
 		expect(JSON.stringify(context.validationIssues)).toContain("Minor risk");
+	});
+
+	it("includes e2e reports in validation review context", () => {
+		const outputDir = tempProject();
+		mkdirSync(join(outputDir, "docs"), { recursive: true });
+		writeFileSync(
+			join(outputDir, "docs/e2e-report.md"),
+			[
+				"# E2E",
+				"Command: curl http://127.0.0.1:3000/api/notes",
+				"Exit status: 0",
+				"Observed result: HTTP 500",
+				"Acceptance status: FAIL",
+				"Evidence: backend route threw.",
+			].join("\n"),
+			"utf-8",
+		);
+
+		const context = buildSupervisorContext({
+			checkpoint: "validation_end",
+			outputDir,
+			requirement: "Build an API",
+			plan: e2ePlan(),
+			validationIssues: [
+				{
+					id: "e2e-acceptance-failed-e2e",
+					severity: "error",
+					message: "E2E failed and needs semantic routing.",
+					ownerTaskId: "e2e",
+					file: "docs/e2e-report.md",
+					needsSemanticRouting: true,
+				},
+			],
+			recentEvents: [],
+			allTaskResults: [],
+		});
+
+		expect(context.e2eReports[0]?.path).toBe("docs/e2e-report.md");
+		expect(context.e2eReports[0]?.content).toContain("Acceptance status: FAIL");
+		expect(JSON.stringify(context.validationIssues)).toContain("needsSemanticRouting");
 	});
 
 	it("reports truncation when changed files or file content are omitted", () => {

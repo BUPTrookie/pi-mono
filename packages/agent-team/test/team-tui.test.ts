@@ -274,6 +274,37 @@ describe("TeamRunComponent", () => {
 		expect(rendered).toContain("missing-output owner: build-cli file: src/index.js");
 	});
 
+	it("surfaces e2e routing decisions in recent logs", () => {
+		const component = new TeamRunComponent(runStub(), {
+			outputDir: "out",
+			modelLabel: "fake",
+			maxParallelAgents: 1,
+		});
+		component.push({ type: "run_start", requirement: "Build", outputDir: "out/project", timestamp: 1 });
+		component.push({
+			type: "validation_end",
+			round: 1,
+			issues: [
+				{
+					id: "e2e-acceptance-failed-e2e",
+					severity: "error",
+					message: "e2e failed -> routed to backend: HTTP 500 from /api/notes.",
+					ownerTaskId: "backend",
+					file: "src/server/index.js",
+					source: "e2e",
+					routedFromTaskId: "e2e",
+					evidence: "HTTP 500",
+				},
+			],
+			timestamp: 2,
+		});
+
+		const rendered = component.render(120).map(stripAnsi).join("\n");
+
+		expect(rendered).toContain("e2e failed -> routed to backend");
+		expect(rendered).toContain("owner: backend");
+	});
+
 	it("shows auto-approved command reuse in recent logs", () => {
 		const component = new TeamRunComponent(runStub(), {
 			outputDir: "out",

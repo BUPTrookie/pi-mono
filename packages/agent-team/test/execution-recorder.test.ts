@@ -132,6 +132,37 @@ describe("execution recorder", () => {
 		expect(JSON.stringify(mainLog)).not.toContain("secret-key");
 	});
 
+	it("summarizes routed e2e failures", () => {
+		const outputDir = tempProject();
+		const recorder = createExecutionRecorder(outputDir);
+		const e2eResult: TeamResult = {
+			success: false,
+			outputDir,
+			tasks: [],
+			totalTurns: 0,
+			validationIssues: [
+				{
+					id: "e2e-acceptance-failed-e2e",
+					severity: "error",
+					message: "e2e failed -> routed to backend: HTTP 500 from /api/notes.",
+					ownerTaskId: "backend",
+					file: "src/server/index.js",
+					source: "e2e",
+					routedFromTaskId: "e2e",
+					evidence: "HTTP 500",
+				},
+			],
+		};
+
+		recorder.record({ type: "run_start", requirement: "Build API", outputDir, timestamp: 1 });
+		recorder.finish(e2eResult);
+
+		const summary = readFileSync(join(outputDir, "docs", "agent-team", "run-summary.md"), "utf-8");
+
+		expect(summary).toContain("## E2E Failures");
+		expect(summary).toContain("| e2e-acceptance-failed-e2e | e2e | backend | src/server/index.js | HTTP 500 |");
+	});
+
 	it("creates the log directory before recording", () => {
 		const outputDir = tempProject();
 		const recorder = createExecutionRecorder(outputDir);

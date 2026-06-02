@@ -85,6 +85,19 @@ function formatIssueSummary(result: TeamResult): string {
 	return issues.map((issue) => `- ${issue.id}: ${issue.severity}: ${issue.message}`).join("\n");
 }
 
+function formatE2eFailures(result: TeamResult): string {
+	const issues = (result.validationIssues ?? []).filter((issue) => issue.source === "e2e");
+	if (issues.length === 0) return "None";
+	return [
+		"| Issue | From | Routed To | File | Evidence |",
+		"| --- | --- | --- | --- | --- |",
+		...issues.map(
+			(issue) =>
+				`| ${issue.id} | ${issue.routedFromTaskId ?? ""} | ${issue.ownerTaskId ?? issue.ownerRole ?? ""} | ${issue.file ?? ""} | ${issue.evidence ?? ""} |`,
+		),
+	].join("\n");
+}
+
 function formatTaskRows(result: TeamResult): string {
 	if (result.tasks.length === 0) return "| _none_ | _none_ | 0 |  |  | 0 |  | 0 |  |  |";
 	return result.tasks
@@ -150,6 +163,10 @@ function buildSummary(result: TeamResult, state: RecorderState): string {
 		"## Supervisor Review",
 		"",
 		formatSupervisorSummary(state),
+		"",
+		"## E2E Failures",
+		"",
+		formatE2eFailures(result),
 		"",
 		"## Validation Issues",
 		"",
