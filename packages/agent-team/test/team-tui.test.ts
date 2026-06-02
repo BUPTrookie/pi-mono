@@ -3,6 +3,15 @@ import { TeamRunComponent } from "../src/tui/team-tui.js";
 import type { TeamEvent, TeamRun } from "../src/types.js";
 
 function runStub(): TeamRun {
+	return createRunStub();
+}
+
+function createRunStub(): TeamRun & {
+	pause: ReturnType<typeof vi.fn>;
+	resume: ReturnType<typeof vi.fn>;
+	abort: ReturnType<typeof vi.fn>;
+	approve: ReturnType<typeof vi.fn>;
+} {
 	return {
 		start: async () => ({ success: true, outputDir: "out", tasks: [], totalTurns: 0 }),
 		subscribe: () => () => undefined,
@@ -273,5 +282,38 @@ describe("TeamRunComponent", () => {
 		const lines = component.render(32).map(stripAnsi);
 
 		expect(lines.every((line) => line.length <= 32)).toBe(true);
+	});
+
+	it("handles pause, approval, rejection, and abort keys when focused", () => {
+		const run = createRunStub();
+		const component = new TeamRunComponent(run);
+		component.handleInput("p");
+		component.push({ type: "run_paused", timestamp: 1 });
+		component.handleInput("p");
+		component.push({
+			type: "approval_requested",
+			requestId: "approval-1",
+			taskId: "test-cli",
+			reason: "Run safe command",
+			command: "npm test",
+			timestamp: 1,
+		});
+		component.handleInput("a");
+		component.push({
+			type: "approval_requested",
+			requestId: "approval-2",
+			taskId: "test-cli",
+			reason: "Run risky command",
+			command: "npm install",
+			timestamp: 2,
+		});
+		component.handleInput("r");
+		component.handleInput("\x03");
+
+		expect(run.pause).toHaveBeenCalled();
+		expect(run.resume).toHaveBeenCalled();
+		expect(run.approve).toHaveBeenCalledWith("approval-1", "approve");
+		expect(run.approve).toHaveBeenCalledWith("approval-2", "reject");
+		expect(run.abort).toHaveBeenCalled();
 	});
 });

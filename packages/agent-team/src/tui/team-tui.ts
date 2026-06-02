@@ -331,7 +331,7 @@ export class TeamRunComponent implements Component {
 }
 
 export async function runTeamTui(config: TeamConfig): Promise<TeamResult> {
-	const run = createTeamRun({ ...config, interventionMode: "interactive" });
+	const run = createTeamRun(config);
 	const terminal = new ProcessTerminal();
 	const tui = new TUI(terminal);
 	const modelLabel = `${config.model.provider ? `${config.model.provider}/` : ""}${config.model.model}`;
@@ -341,6 +341,7 @@ export async function runTeamTui(config: TeamConfig): Promise<TeamResult> {
 		maxParallelAgents: config.maxParallelAgents ?? 2,
 	});
 	tui.addChild(component);
+	tui.setFocus(component);
 	const unsubscribe = run.subscribe((event) => {
 		component.push(event);
 		tui.requestRender();

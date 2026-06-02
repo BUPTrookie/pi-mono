@@ -145,11 +145,11 @@ Options:
   --max-parallel <n>         Max parallel agents (default: from config, or 2)
   --max-repair-rounds <n>    Max validation repair rounds (default: from config, or 2)
   --thinking-level <lvl>     Thinking level: off, minimal, low, medium, high, xhigh
-  --intervention-mode <mode> none, approval, interactive (default: interactive with TUI)
+  --intervention-mode <mode> none, approval, interactive (default: none)
   --supervision-mode <mode>  off, milestone (default: off)
   --permission-mode <mode>   open, owned (default: open; owned enforces role ownedDirectories)
   --execution-mode <mode>    open, restricted (default: open; approval flow still applies)
-  --interactive              Run the TUI and enable approvals (default)
+  --interactive              Run the TUI and enable approvals
   --no-interactive           Run without the TUI
   -h, --help                 Show this help message
 `);
