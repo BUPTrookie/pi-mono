@@ -7,7 +7,6 @@ import { convertToLlm } from "@mariozechner/pi-coding-agent";
 import type { ApprovalDecision, InterventionMode, RoleDefinition, TaskCheckResult, TaskResult } from "../types.js";
 import { extractTextContent, isRecord, sanitizeTaskId } from "../utils/shared.js";
 import { createBashSafetyGuard } from "./bash-safety.js";
-import { createOwnershipGuard } from "./file-ownership.js";
 import { buildToolPool } from "./tool-pool.js";
 
 export interface TeamAgentConfig {
@@ -202,7 +201,7 @@ export async function runTeamAgent(taskDescription: string, config: TeamAgentCon
 	const maxTurns = role.maxTurns;
 
 	const tools = buildToolPool(role, outputDir);
-	const ownershipGuard = createOwnershipGuard(role.ownedDirectories, outputDir);
+	// Ownership guard removed — all agents have full file access.
 	const bashSafetyGuard = createBashSafetyGuard({
 		taskId: config.taskId ?? role.name,
 		interventionMode: config.interventionMode ?? "none",
@@ -221,13 +220,6 @@ export async function runTeamAgent(taskDescription: string, config: TeamAgentCon
 		getApiKey,
 		convertToLlm,
 		beforeToolCall: async (context) => {
-			const ownershipResult = await ownershipGuard(context);
-			if (ownershipResult?.block) {
-				config.onTaskProgress?.(
-					`Blocked ${context.toolCall.name}: ${ownershipResult.reason ?? "ownership violation"}`,
-				);
-				return ownershipResult;
-			}
 			const bashResult = await bashSafetyGuard(context);
 			if (bashResult?.block) {
 				config.onTaskProgress?.(`Blocked ${context.toolCall.name}: ${bashResult.reason ?? "unsafe command"}`);

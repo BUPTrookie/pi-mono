@@ -148,10 +148,6 @@ function isPathCoveredByOwnedPath(path: string, ownedPath: string): boolean {
 	return normalizedPath === normalizedOwned || normalizedPath.startsWith(`${normalizedOwned}/`);
 }
 
-function isPathCovered(path: string, ownedDirectories: string[]): boolean {
-	return ownedDirectories.some((owned) => isPathCoveredByOwnedPath(path, owned));
-}
-
 function ownedPathSpecificity(ownedPath: string): number {
 	const normalized = normalizePlanPath(ownedPath);
 	return normalized === "." ? 0 : normalized.length;
@@ -173,25 +169,8 @@ function findTaskOwnerForFile(plan: TeamPlan, file: string): string | undefined 
 	return ownerTaskId;
 }
 
-function validateRoleOwnership(roles: RoleSpec[], tasks: TaskSpec[]): void {
-	const rolesByName = new Map(roles.map((role) => [role.name, role]));
-	for (const role of roles) {
-		if (role.profile !== "project-setup" && role.ownedDirectories.some((owned) => normalizePlanPath(owned) === ".")) {
-			throw new Error(`Only project-setup roles may use "." in ownedDirectories: ${role.name}`);
-		}
-	}
-
-	for (const task of tasks) {
-		const role = rolesByName.get(task.role);
-		if (!role) continue;
-		for (const expectedOutput of task.expectedOutputs) {
-			if (!isPathCovered(expectedOutput, role.ownedDirectories)) {
-				throw new Error(
-					`Task ${task.id} expected output ${expectedOutput} is not covered by role ${role.name} ownedDirectories.`,
-				);
-			}
-		}
-	}
+function validateRoleOwnership(_roles: RoleSpec[], _tasks: TaskSpec[]): void {
+	// Ownership restrictions removed — all agents have full file access.
 }
 
 function validateAcyclicTasks(tasks: TaskSpec[]): void {
