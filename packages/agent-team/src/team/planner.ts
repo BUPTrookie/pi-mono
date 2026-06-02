@@ -6,6 +6,7 @@ import { buildRoleSystemPrompt } from "../roles/system-prompts.js";
 import type {
 	ContractSpec,
 	GeneratedContracts,
+	PermissionMode,
 	PlannerDiagnostic,
 	PlannerOptions,
 	PlannerResult,
@@ -27,13 +28,17 @@ interface RawPlannerJson {
 	notes?: unknown;
 }
 
-function roleFromSpec(spec: RoleSpec): RoleDefinition {
+interface PlannerParseOptions {
+	permissionMode?: PermissionMode;
+}
+
+function roleFromSpec(spec: RoleSpec, permissionMode: PermissionMode = "open"): RoleDefinition {
 	const profile = getRoleProfile(spec.profile);
 	return {
 		name: spec.name,
 		profile: spec.profile,
 		description: spec.description,
-		systemPrompt: buildRoleSystemPrompt(spec),
+		systemPrompt: buildRoleSystemPrompt(spec, permissionMode),
 		allowedTools: profile.allowedTools,
 		ownedDirectories: spec.ownedDirectories,
 		skillHints: profile.skillHints,
@@ -42,10 +47,13 @@ function roleFromSpec(spec: RoleSpec): RoleDefinition {
 	};
 }
 
-export function createRoleRegistry(plan: TeamPlan): Map<string, RoleDefinition> {
+export function createRoleRegistry(
+	plan: TeamPlan,
+	permissionMode: PermissionMode = "open",
+): Map<string, RoleDefinition> {
 	const registry = new Map<string, RoleDefinition>();
 	for (const role of plan.roles) {
-		registry.set(role.name, roleFromSpec(role));
+		registry.set(role.name, roleFromSpec(role, permissionMode));
 	}
 	return registry;
 }
@@ -169,8 +177,27 @@ function findTaskOwnerForFile(plan: TeamPlan, file: string): string | undefined 
 	return ownerTaskId;
 }
 
-function validateRoleOwnership(_roles: RoleSpec[], _tasks: TaskSpec[]): void {
-	// Ownership restrictions removed — all agents have full file access.
+function validateRoleOwnership(roles: RoleSpec[], tasks: TaskSpec[], permissionMode: PermissionMode): void {
+	if (permissionMode === "open") return;
+
+	const rolesByName = new Map(roles.map((role) => [role.name, role]));
+	for (const role of roles) {
+		if (role.profile !== "project-setup" && role.ownedDirectories.some((path) => normalizePlanPath(path) === ".")) {
+			throw new Error('Only project-setup roles may use "." in ownedDirectories when permissionMode is owned.');
+		}
+	}
+
+	for (const task of tasks) {
+		const role = rolesByName.get(task.role);
+		if (!role) continue;
+		for (const output of task.expectedOutputs) {
+			if (!role.ownedDirectories.some((ownedPath) => isPathCoveredByOwnedPath(output, ownedPath))) {
+				throw new Error(
+					`Task ${task.id} expected output ${output} is not covered by role ${role.name} ownedDirectories.`,
+				);
+			}
+		}
+	}
 }
 
 function validateAcyclicTasks(tasks: TaskSpec[]): void {
@@ -230,7 +257,8 @@ function buildContracts(raw: RawPlannerJson): GeneratedContracts {
 	return contracts;
 }
 
-function validatePlannerJson(raw: RawPlannerJson): PlannerResult {
+function validatePlannerJson(raw: RawPlannerJson, options: PlannerParseOptions = {}): PlannerResult {
+	const permissionMode = options.permissionMode ?? "open";
 	const planRecord = asRecord(raw.teamPlan, "teamPlan");
 	const rolesRaw = planRecord.roles;
 	const tasksRaw = planRecord.tasks;
@@ -260,7 +288,7 @@ function validatePlannerJson(raw: RawPlannerJson): PlannerResult {
 		}
 	}
 	validateAcyclicTasks(tasks);
-	validateRoleOwnership(roles, tasks);
+	validateRoleOwnership(roles, tasks, permissionMode);
 	validateE2eVerifierTask(roles, tasks);
 
 	const contracts = buildContracts(raw);
@@ -291,16 +319,20 @@ function validatePlannerJson(raw: RawPlannerJson): PlannerResult {
 	return { plan, contracts, diagnostics: [] };
 }
 
-export function parsePlannerOutput(text: string): PlannerResult {
+export function parsePlannerOutput(text: string, options: PlannerParseOptions = {}): PlannerResult {
 	const parsed = JSON.parse(extractJsonText(text)) as RawPlannerJson;
-	return validatePlannerJson(parsed);
+	return validatePlannerJson(parsed, options);
 }
 
 function extractAssistantText(message: Awaited<ReturnType<typeof completeSimple>>): string {
 	return extractTextContent(message.content);
 }
 
-function plannerSystemPrompt(): string {
+function plannerSystemPrompt(permissionMode: PermissionMode = "open"): string {
+	const ownershipRule =
+		permissionMode === "owned"
+			? `- ownedDirectories must cover every path in expectedOutputs. If a task must produce root-level files (package.json, .gitignore, tsconfig.json, etc.), its role's ownedDirectories must include "." so the agent can write to the project root. Only project-setup roles may use ".". Match ownedDirectories to the actual directories the task writes to — do not blindly use ["src"].`
+			: `- ownedDirectories describe primary responsibility and repair routing. Prefer covering the main expectedOutputs, but agents may edit other project files when required because permissionMode is open.`;
 	return `You are the Lead Planner for a dynamic AI engineering team.
 
 Your job is to understand the user's project globally and produce the collaboration contracts worker agents will implement.
@@ -358,7 +390,7 @@ ${formatRoleProfilesForPlanner()}
 - Include dataModel only if the project needs persistent or structured domain data.
 - Do not invent generic placeholder APIs or domain objects.
 - All paths must be relative to the project root. Never use absolute paths or ..
-- ownedDirectories must cover every path in expectedOutputs. If a task must produce root-level files (package.json, .gitignore, tsconfig.json, etc.), its role's ownedDirectories must include "." so the agent can write to the project root. Match ownedDirectories to the actual directories the task writes to — do not blindly use ["src"].
+${ownershipRule}
 - Every task role must exist in teamPlan.roles.
 - Every task dependency must reference an existing task id.
 - Contract files are communication artifacts for workers; make them specific enough to prevent drift.`;
@@ -384,7 +416,7 @@ async function completePlannerJson(options: PlannerOptions, userPrompt: string):
 	const message = await completeSimple(
 		options.model,
 		{
-			systemPrompt: plannerSystemPrompt(),
+			systemPrompt: plannerSystemPrompt(options.permissionMode ?? "open"),
 			messages: [{ role: "user", content: userPrompt, timestamp: Date.now() }],
 		},
 		{
@@ -406,7 +438,7 @@ ${options.requirement}
 Plan the team and generate contracts. Return JSON only.`;
 	const firstOutput = await completePlannerJson(options, firstPrompt);
 	try {
-		return parsePlannerOutput(firstOutput);
+		return parsePlannerOutput(firstOutput, { permissionMode: options.permissionMode });
 	} catch (firstError) {
 		const firstMessage = firstError instanceof Error ? firstError.message : String(firstError);
 		const repairedOutput = await completePlannerJson(
@@ -414,7 +446,7 @@ Plan the team and generate contracts. Return JSON only.`;
 			repairPrompt(options.requirement, firstOutput, firstMessage),
 		);
 		try {
-			const result = parsePlannerOutput(repairedOutput);
+			const result = parsePlannerOutput(repairedOutput, { permissionMode: options.permissionMode });
 			const diagnostic: PlannerDiagnostic = {
 				severity: "warning",
 				message: `Planner output required one repair attempt: ${firstMessage}`,

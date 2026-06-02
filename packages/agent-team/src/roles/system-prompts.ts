@@ -1,7 +1,14 @@
-import type { RoleSpec } from "../types.js";
+import type { PermissionMode, RoleSpec } from "../types.js";
 import { getRoleProfile } from "./role-profiles.js";
 
-export function buildRoleSystemPrompt(role: RoleSpec): string {
+function permissionInstruction(role: RoleSpec, permissionMode: PermissionMode): string {
+	if (permissionMode === "owned") {
+		return `- Only write files inside your owned paths: ${role.ownedDirectories.join(", ")}.`;
+	}
+	return `- Prefer your assigned paths: ${role.ownedDirectories.join(", ")}; you may edit other project files when required to complete the task.`;
+}
+
+export function buildRoleSystemPrompt(role: RoleSpec, permissionMode: PermissionMode = "open"): string {
 	const profile = getRoleProfile(role.profile);
 	if (!profile) throw new Error(`Unknown role profile: ${role.profile}`);
 
@@ -17,7 +24,7 @@ Collaboration contract:
 - Read docs/contracts/team-plan.json and docs/contracts/project-manifest.json before changing files.
 - If docs/contracts/openapi.json exists, API routes and client calls must follow it exactly.
 - If docs/contracts/data-model.json exists, persistence and domain types must follow it.
-- Only write files inside your owned paths: ${role.ownedDirectories.join(", ")}.
+${permissionInstruction(role, permissionMode)}
 - Treat acceptance criteria in the task prompt as mandatory.
 - Prefer small, coherent files over unrelated broad rewrites.
 - Do not run long-lived services or dependency installation commands unless explicitly approved.

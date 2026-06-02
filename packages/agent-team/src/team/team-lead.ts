@@ -276,6 +276,7 @@ export class TeamLead {
 				model: this.model,
 				getApiKey: this.getApiKey,
 				thinkingLevel: this.config.thinkingLevel,
+				permissionMode: this.config.permissionMode ?? "open",
 				signal,
 			});
 			plan = plannerResult.plan;
@@ -296,7 +297,7 @@ export class TeamLead {
 		this.emitEvent({ type: "plan_created", plan, timestamp: now() });
 		await this.supervise("plan_created", plan, {});
 
-		const roleRegistry = createRoleRegistry(plan);
+		const roleRegistry = createRoleRegistry(plan, this.config.permissionMode ?? "open");
 		const allResults: TaskResult[] = [];
 		let totalTurns = 0;
 		let round = 0;
@@ -544,6 +545,7 @@ export class TeamLead {
 					parentSignal: this.abortController.signal,
 					thinkingLevel: role.thinkingLevelOverride ?? this.config.thinkingLevel,
 					interventionMode: this.config.interventionMode ?? "none",
+					permissionMode: this.config.permissionMode ?? "open",
 					taskId: task.id,
 					onTaskProgress: (message) =>
 						this.emitEvent({ type: "task_progress", taskId: task.id, message, timestamp: now() }),

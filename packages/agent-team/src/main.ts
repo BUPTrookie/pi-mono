@@ -6,7 +6,7 @@ import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
 import { findConfigFile, mergeConfig } from "./config.js";
 import { runTeam } from "./team/team-runner.js";
 import { runTeamTui } from "./tui/team-tui.js";
-import type { InterventionMode, SupervisionMode, TeamConfig } from "./types.js";
+import type { InterventionMode, PermissionMode, SupervisionMode, TeamConfig } from "./types.js";
 
 function isThinkingLevel(value: string): value is ThinkingLevel {
 	return (
@@ -27,6 +27,10 @@ function isSupervisionMode(value: string): value is SupervisionMode {
 	return value === "off" || value === "milestone";
 }
 
+function isPermissionMode(value: string): value is PermissionMode {
+	return value === "open" || value === "owned";
+}
+
 interface ParsedArgs {
 	requirement?: string;
 	outputDir?: string;
@@ -37,6 +41,7 @@ interface ParsedArgs {
 		maxRepairRounds?: number;
 		interventionMode?: InterventionMode;
 		supervisionMode?: SupervisionMode;
+		permissionMode?: PermissionMode;
 	};
 	configPath?: string;
 	help?: boolean;
@@ -87,6 +92,10 @@ export function parseArgs(args: string[]): ParsedArgs {
 			if (!result.options) result.options = {};
 			const mode = args[++i];
 			if (isSupervisionMode(mode)) result.options.supervisionMode = mode;
+		} else if (arg === "--permission-mode" && i + 1 < args.length) {
+			if (!result.options) result.options = {};
+			const mode = args[++i];
+			if (isPermissionMode(mode)) result.options.permissionMode = mode;
 		} else if (arg === "--interactive") {
 			result.interactive = true;
 			if (!result.options) result.options = {};
@@ -129,6 +138,7 @@ Options:
   --thinking-level <lvl>     Thinking level: off, minimal, low, medium, high, xhigh
   --intervention-mode <mode> none, approval, interactive (default: interactive with TUI)
   --supervision-mode <mode>  off, milestone (default: off)
+  --permission-mode <mode>   open, owned (default: open; owned enforces role ownedDirectories)
   --interactive              Run the TUI and enable approvals (default)
   --no-interactive           Run without the TUI
   -h, --help                 Show this help message
@@ -164,6 +174,7 @@ async function main(): Promise<void> {
 		maxRepairRounds: merged.maxRepairRounds,
 		interventionMode: merged.interventionMode,
 		supervisionMode: merged.supervisionMode,
+		permissionMode: merged.permissionMode,
 		thinkingLevel: merged.thinkingLevel,
 	};
 

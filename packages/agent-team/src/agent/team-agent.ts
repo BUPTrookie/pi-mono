@@ -4,9 +4,17 @@ import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
 import { Agent, type AgentEvent, type AgentMessage, type StreamFn } from "@mariozechner/pi-agent-core";
 import type { Model } from "@mariozechner/pi-ai";
 import { convertToLlm } from "@mariozechner/pi-coding-agent";
-import type { ApprovalDecision, InterventionMode, RoleDefinition, TaskCheckResult, TaskResult } from "../types.js";
+import type {
+	ApprovalDecision,
+	InterventionMode,
+	PermissionMode,
+	RoleDefinition,
+	TaskCheckResult,
+	TaskResult,
+} from "../types.js";
 import { extractTextContent, isRecord, sanitizeTaskId } from "../utils/shared.js";
 import { createBashSafetyGuard } from "./bash-safety.js";
+import { createOwnershipGuard } from "./file-ownership.js";
 import { buildToolPool } from "./tool-pool.js";
 
 export interface TeamAgentConfig {
@@ -17,6 +25,7 @@ export interface TeamAgentConfig {
 	getApiKey?: (provider: string) => Promise<string | undefined> | string | undefined;
 	parentSignal?: AbortSignal;
 	thinkingLevel?: ThinkingLevel;
+	permissionMode?: PermissionMode;
 	taskId?: string;
 	interventionMode?: InterventionMode;
 	onAgentEvent?: (event: AgentEvent) => void;
@@ -199,9 +208,11 @@ function createContractAwareTransformContext(
 export async function runTeamAgent(taskDescription: string, config: TeamAgentConfig): Promise<TaskResult> {
 	const { role, model, outputDir, streamFn, getApiKey, parentSignal, thinkingLevel } = config;
 	const maxTurns = role.maxTurns;
+	const permissionMode = config.permissionMode ?? "open";
 
 	const tools = buildToolPool(role, outputDir);
-	// Ownership guard removed — all agents have full file access.
+	const ownershipGuard =
+		permissionMode === "owned" ? createOwnershipGuard(role.ownedDirectories, outputDir) : undefined;
 	const bashSafetyGuard = createBashSafetyGuard({
 		taskId: config.taskId ?? role.name,
 		interventionMode: config.interventionMode ?? "none",
@@ -220,6 +231,13 @@ export async function runTeamAgent(taskDescription: string, config: TeamAgentCon
 		getApiKey,
 		convertToLlm,
 		beforeToolCall: async (context) => {
+			const ownershipResult = ownershipGuard ? await ownershipGuard(context) : undefined;
+			if (ownershipResult?.block) {
+				config.onTaskProgress?.(
+					`Blocked ${context.toolCall.name}: ${ownershipResult.reason ?? "outside owned paths"}`,
+				);
+				return ownershipResult;
+			}
 			const bashResult = await bashSafetyGuard(context);
 			if (bashResult?.block) {
 				config.onTaskProgress?.(`Blocked ${context.toolCall.name}: ${bashResult.reason ?? "unsafe command"}`);

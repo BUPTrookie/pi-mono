@@ -44,6 +44,15 @@ describe("role profiles", () => {
 		expect(prompt).toContain("complete user workflows");
 	});
 
+	it("describes open and owned permission modes differently", () => {
+		const openPrompt = buildRoleSystemPrompt(role("backend-engineer"), "open");
+		const ownedPrompt = buildRoleSystemPrompt(role("backend-engineer"), "owned");
+
+		expect(openPrompt).toContain("Prefer your assigned paths");
+		expect(openPrompt).toContain("may edit other project files");
+		expect(ownedPrompt).toContain("Only write files inside your owned paths");
+	});
+
 	it("keeps docs engineer away from bash execution", () => {
 		const profile = getRoleProfile("docs-engineer");
 

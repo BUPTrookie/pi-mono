@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
-import type { InterventionMode, SupervisionMode, TeamConfig } from "./types.js";
+import type { InterventionMode, PermissionMode, SupervisionMode, TeamConfig } from "./types.js";
 
 export interface AgentTeamConfigFile {
 	outputDir?: string;
@@ -17,6 +17,7 @@ export interface AgentTeamConfigFile {
 	maxRepairRounds?: number;
 	interventionMode?: InterventionMode;
 	supervisionMode?: SupervisionMode;
+	permissionMode?: PermissionMode;
 }
 
 const CONFIG_FILENAMES = ["agent-team.json"];
@@ -70,10 +71,17 @@ export function mergeConfig(
 		maxRepairRounds?: number;
 		interventionMode?: InterventionMode;
 		supervisionMode?: SupervisionMode;
+		permissionMode?: PermissionMode;
 	},
 ): Pick<
 	TeamConfig,
-	"model" | "maxParallelAgents" | "thinkingLevel" | "maxRepairRounds" | "interventionMode" | "supervisionMode"
+	| "model"
+	| "maxParallelAgents"
+	| "thinkingLevel"
+	| "maxRepairRounds"
+	| "interventionMode"
+	| "supervisionMode"
+	| "permissionMode"
 > {
 	const fileModel = fileConfig?.model;
 
@@ -89,5 +97,6 @@ export function mergeConfig(
 		maxRepairRounds: cliOptions?.maxRepairRounds ?? fileConfig?.maxRepairRounds,
 		interventionMode: cliOptions?.interventionMode ?? fileConfig?.interventionMode,
 		supervisionMode: cliOptions?.supervisionMode ?? fileConfig?.supervisionMode,
+		permissionMode: cliOptions?.permissionMode ?? fileConfig?.permissionMode ?? "open",
 	};
 }

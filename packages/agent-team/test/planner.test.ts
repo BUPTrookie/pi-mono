@@ -231,6 +231,28 @@ describe("LLM planner", () => {
 		expect(() => parsePlannerOutput(text)).toThrow("must depend on");
 	});
 
+	it("allows broad ownership in open permission mode", () => {
+		const text = plannerJson("polling").replace('"ownedDirectories":["."]', '"ownedDirectories":["src"]');
+
+		expect(() => parsePlannerOutput(text)).not.toThrow();
+	});
+
+	it("rejects task expected outputs outside role owned paths in owned permission mode", () => {
+		const text = plannerJson("polling").replace('"ownedDirectories":["."]', '"ownedDirectories":["src"]');
+
+		expect(() => parsePlannerOutput(text, { permissionMode: "owned" })).toThrow(
+			"expected output package.json is not covered",
+		);
+	});
+
+	it("rejects root write ownership for non project-setup profiles in owned permission mode", () => {
+		const text = plannerJson("polling").replace('"profile":"project-setup"', '"profile":"backend-engineer"');
+
+		expect(() => parsePlannerOutput(text, { permissionMode: "owned" })).toThrow(
+			'Only project-setup roles may use "."',
+		);
+	});
+
 	it("allows project-setup roles to own the project root", () => {
 		const result = parsePlannerOutput(plannerJson("polling"));
 		expect(result.plan.roles[0]?.profile).toBe("project-setup");

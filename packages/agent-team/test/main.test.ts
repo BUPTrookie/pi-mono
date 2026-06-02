@@ -22,4 +22,10 @@ describe("agent-team CLI args", () => {
 		expect(parsed.interactive).toBe(true);
 		expect(parsed.options?.interventionMode).toBe("interactive");
 	});
+
+	it("parses permission mode", () => {
+		const parsed = parseArgs(["Build a todo app", "--permission-mode", "owned"]);
+
+		expect(parsed.options?.permissionMode).toBe("owned");
+	});
 });

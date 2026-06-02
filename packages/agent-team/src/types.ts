@@ -16,6 +16,7 @@ export type RoleProfileId =
 
 export type InterventionMode = "none" | "approval" | "interactive";
 export type SupervisionMode = "off" | "milestone";
+export type PermissionMode = "open" | "owned";
 
 export interface RoleDefinition {
 	name: AgentRoleName;
@@ -92,6 +93,7 @@ export interface PlannerOptions {
 	model: Model<Api>;
 	getApiKey: (provider: string) => Promise<string | undefined> | string | undefined;
 	thinkingLevel?: ThinkingLevel;
+	permissionMode?: PermissionMode;
 	signal?: AbortSignal;
 }
 
@@ -173,6 +175,7 @@ export interface TeamConfig {
 	thinkingLevel?: ThinkingLevel;
 	interventionMode?: InterventionMode;
 	supervisionMode?: SupervisionMode;
+	permissionMode?: PermissionMode;
 	maxRepairRounds?: number;
 }
 
