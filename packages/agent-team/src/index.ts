@@ -4,7 +4,7 @@
  * Multi-agent team orchestrator for full-stack development.
  */
 
-export { createBashSafetyGuard, explainUnsafeBash } from "./agent/bash-safety.js";
+export { classifyBashCommand, createBashSafetyGuard, explainUnsafeBash } from "./agent/bash-safety.js";
 export { createOwnershipGuard, isPathOwned } from "./agent/file-ownership.js";
 export { runTeamAgent, type TeamAgentConfig } from "./agent/team-agent.js";
 export { buildToolPool } from "./agent/tool-pool.js";
@@ -48,6 +48,7 @@ export { runTeamTui, TeamRunComponent, type TeamRunComponentOptions } from "./tu
 export type {
 	AgentRoleName,
 	ApprovalDecision,
+	ApprovalPolicy,
 	ContractSpec,
 	GeneratedContracts,
 	InterventionMode,

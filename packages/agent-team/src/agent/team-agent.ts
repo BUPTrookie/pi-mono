@@ -6,6 +6,7 @@ import type { Model } from "@mariozechner/pi-ai";
 import { convertToLlm } from "@mariozechner/pi-coding-agent";
 import type {
 	ApprovalDecision,
+	ApprovalPolicy,
 	ExecutionMode,
 	InterventionMode,
 	PermissionMode,
@@ -28,11 +29,19 @@ export interface TeamAgentConfig {
 	thinkingLevel?: ThinkingLevel;
 	permissionMode?: PermissionMode;
 	executionMode?: ExecutionMode;
+	approvalPolicy?: ApprovalPolicy;
 	taskId?: string;
 	interventionMode?: InterventionMode;
 	onAgentEvent?: (event: AgentEvent) => void;
 	onTaskProgress?: (message: string) => void;
-	requestApproval?: (request: { taskId: string; reason: string; command: string }) => Promise<ApprovalDecision>;
+	requestApproval?: (request: {
+		taskId: string;
+		reason: string;
+		command: string;
+		approvalKey?: string;
+		riskLevel?: "safe" | "medium" | "high";
+		category?: string;
+	}) => Promise<ApprovalDecision>;
 }
 
 /**
@@ -212,6 +221,7 @@ export async function runTeamAgent(taskDescription: string, config: TeamAgentCon
 	const maxTurns = role.maxTurns;
 	const permissionMode = config.permissionMode ?? "open";
 	const executionMode = config.executionMode ?? "open";
+	const approvalPolicy = config.approvalPolicy ?? "minimal";
 
 	const tools = buildToolPool(role, outputDir);
 	const ownershipGuard =
@@ -220,6 +230,7 @@ export async function runTeamAgent(taskDescription: string, config: TeamAgentCon
 		taskId: config.taskId ?? role.name,
 		interventionMode: config.interventionMode ?? "none",
 		executionMode,
+		approvalPolicy,
 		requestApproval: config.requestApproval,
 		allowLocalServerLifecycle: role.profile === "e2e-verifier",
 	});

@@ -38,7 +38,14 @@ export type TeamEventEmitter = (event: TeamEvent) => void;
 
 export interface TeamLeadControls {
 	waitIfPaused: () => Promise<void>;
-	requestApproval: (request: { taskId: string; reason: string; command: string }) => Promise<ApprovalDecision>;
+	requestApproval: (request: {
+		taskId: string;
+		reason: string;
+		command: string;
+		approvalKey?: string;
+		riskLevel?: "safe" | "medium" | "high";
+		category?: string;
+	}) => Promise<ApprovalDecision>;
 	getInterventions: () => string[];
 }
 
@@ -565,6 +572,7 @@ export class TeamLead {
 					interventionMode: this.config.interventionMode ?? "none",
 					permissionMode: this.config.permissionMode ?? "open",
 					executionMode: this.config.executionMode ?? "open",
+					approvalPolicy: this.config.approvalPolicy ?? "minimal",
 					taskId: task.id,
 					onTaskProgress: (message) =>
 						this.emitEvent({ type: "task_progress", taskId: task.id, message, timestamp: now() }),

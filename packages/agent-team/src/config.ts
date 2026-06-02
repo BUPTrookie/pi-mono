@@ -2,7 +2,14 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
-import type { ExecutionMode, InterventionMode, PermissionMode, SupervisionMode, TeamConfig } from "./types.js";
+import type {
+	ApprovalPolicy,
+	ExecutionMode,
+	InterventionMode,
+	PermissionMode,
+	SupervisionMode,
+	TeamConfig,
+} from "./types.js";
 
 export interface AgentTeamConfigFile {
 	outputDir?: string;
@@ -19,6 +26,7 @@ export interface AgentTeamConfigFile {
 	supervisionMode?: SupervisionMode;
 	permissionMode?: PermissionMode;
 	executionMode?: ExecutionMode;
+	approvalPolicy?: ApprovalPolicy;
 }
 
 const CONFIG_FILENAMES = ["agent-team.json"];
@@ -74,6 +82,7 @@ export function mergeConfig(
 		supervisionMode?: SupervisionMode;
 		permissionMode?: PermissionMode;
 		executionMode?: ExecutionMode;
+		approvalPolicy?: ApprovalPolicy;
 	},
 ): Pick<
 	TeamConfig,
@@ -85,6 +94,7 @@ export function mergeConfig(
 	| "supervisionMode"
 	| "permissionMode"
 	| "executionMode"
+	| "approvalPolicy"
 > {
 	const fileModel = fileConfig?.model;
 
@@ -102,5 +112,6 @@ export function mergeConfig(
 		supervisionMode: cliOptions?.supervisionMode ?? fileConfig?.supervisionMode,
 		permissionMode: cliOptions?.permissionMode ?? fileConfig?.permissionMode ?? "open",
 		executionMode: cliOptions?.executionMode ?? fileConfig?.executionMode ?? "open",
+		approvalPolicy: cliOptions?.approvalPolicy ?? fileConfig?.approvalPolicy ?? "minimal",
 	};
 }

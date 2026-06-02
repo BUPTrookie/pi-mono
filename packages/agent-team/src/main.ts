@@ -6,7 +6,14 @@ import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
 import { findConfigFile, mergeConfig } from "./config.js";
 import { runTeam } from "./team/team-runner.js";
 import { runTeamTui } from "./tui/team-tui.js";
-import type { ExecutionMode, InterventionMode, PermissionMode, SupervisionMode, TeamConfig } from "./types.js";
+import type {
+	ApprovalPolicy,
+	ExecutionMode,
+	InterventionMode,
+	PermissionMode,
+	SupervisionMode,
+	TeamConfig,
+} from "./types.js";
 
 function isThinkingLevel(value: string): value is ThinkingLevel {
 	return (
@@ -35,6 +42,10 @@ function isExecutionMode(value: string): value is ExecutionMode {
 	return value === "open" || value === "restricted";
 }
 
+function isApprovalPolicy(value: string): value is ApprovalPolicy {
+	return value === "minimal" || value === "strict";
+}
+
 interface ParsedArgs {
 	requirement?: string;
 	outputDir?: string;
@@ -47,6 +58,7 @@ interface ParsedArgs {
 		supervisionMode?: SupervisionMode;
 		permissionMode?: PermissionMode;
 		executionMode?: ExecutionMode;
+		approvalPolicy?: ApprovalPolicy;
 	};
 	configPath?: string;
 	help?: boolean;
@@ -105,6 +117,10 @@ export function parseArgs(args: string[]): ParsedArgs {
 			if (!result.options) result.options = {};
 			const mode = args[++i];
 			if (isExecutionMode(mode)) result.options.executionMode = mode;
+		} else if (arg === "--approval-policy" && i + 1 < args.length) {
+			if (!result.options) result.options = {};
+			const policy = args[++i];
+			if (isApprovalPolicy(policy)) result.options.approvalPolicy = policy;
 		} else if (arg === "--interactive") {
 			result.interactive = true;
 			if (!result.options) result.options = {};
@@ -149,6 +165,7 @@ Options:
   --supervision-mode <mode>  off, milestone (default: off)
   --permission-mode <mode>   open, owned (default: open; owned enforces role ownedDirectories)
   --execution-mode <mode>    open, restricted (default: open; approval flow still applies)
+  --approval-policy <policy> minimal, strict (default: minimal)
   --interactive              Run the TUI and enable approvals
   --no-interactive           Run without the TUI
   -h, --help                 Show this help message
@@ -186,6 +203,7 @@ async function main(): Promise<void> {
 		supervisionMode: merged.supervisionMode,
 		permissionMode: merged.permissionMode,
 		executionMode: merged.executionMode,
+		approvalPolicy: merged.approvalPolicy,
 		thinkingLevel: merged.thinkingLevel,
 	};
 

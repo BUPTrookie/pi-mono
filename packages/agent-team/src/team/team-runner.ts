@@ -17,6 +17,7 @@ import { type SupervisorRunner, type TeamAgentRunner, TeamLead, type TeamValidat
 
 interface PendingApproval {
 	resolve: (decision: ApprovalDecision) => void;
+	approvalKey?: string;
 }
 
 type ApiKeyResolver = (provider: string) => Promise<string | undefined> | string | undefined;
@@ -138,6 +139,7 @@ class DynamicTeamRun implements TeamRun {
 	private paused = false;
 	private pauseWaiters: Array<() => void> = [];
 	private approvals = new Map<string, PendingApproval>();
+	private approvedApprovalKeys = new Set<string>();
 	private interventions: string[] = [];
 	private approvalCounter = 0;
 	private recorder?: ExecutionRecorder;
@@ -184,6 +186,9 @@ class DynamicTeamRun implements TeamRun {
 		const pending = this.approvals.get(requestId);
 		if (!pending) return;
 		this.approvals.delete(requestId);
+		if (decision === "approve" && pending.approvalKey) {
+			this.approvedApprovalKeys.add(pending.approvalKey);
+		}
 		pending.resolve(decision);
 		this.emit({ type: "approval_resolved", requestId, decision, timestamp: Date.now() });
 	}
@@ -239,7 +244,7 @@ class DynamicTeamRun implements TeamRun {
 				emit: (event) => this.emit(event),
 				controls: {
 					waitIfPaused: () => this.waitIfPaused(),
-					requestApproval: (request) => this.requestApproval(request.taskId, request.reason, request.command),
+					requestApproval: (request) => this.requestApprovalForCommand(request),
 					getInterventions: () => [...this.interventions],
 				},
 				agentRunner: this.overrides.agentRunner,
@@ -288,12 +293,33 @@ class DynamicTeamRun implements TeamRun {
 		});
 	}
 
-	private async requestApproval(taskId: string, reason: string, command: string): Promise<ApprovalDecision> {
+	private async requestApprovalForCommand(request: {
+		taskId: string;
+		reason: string;
+		command: string;
+		approvalKey?: string;
+	}): Promise<ApprovalDecision> {
 		if ((this.config.interventionMode ?? "none") === "none") return "reject";
+		if (request.approvalKey && this.approvedApprovalKeys.has(request.approvalKey)) {
+			this.emit({
+				type: "task_progress",
+				taskId: request.taskId,
+				message: `Auto-approved by prior approval: ${request.command}`,
+				timestamp: Date.now(),
+			});
+			return "approve";
+		}
 		const requestId = `approval-${++this.approvalCounter}`;
-		this.emit({ type: "approval_requested", requestId, taskId, reason, command, timestamp: Date.now() });
 		return new Promise<ApprovalDecision>((resolveDecision) => {
-			this.approvals.set(requestId, { resolve: resolveDecision });
+			this.approvals.set(requestId, { resolve: resolveDecision, approvalKey: request.approvalKey });
+			this.emit({
+				type: "approval_requested",
+				requestId,
+				taskId: request.taskId,
+				reason: request.reason,
+				command: request.command,
+				timestamp: Date.now(),
+			});
 		});
 	}
 }

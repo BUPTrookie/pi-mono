@@ -18,6 +18,7 @@ export type InterventionMode = "none" | "approval" | "interactive";
 export type SupervisionMode = "off" | "milestone";
 export type PermissionMode = "open" | "owned";
 export type ExecutionMode = "open" | "restricted";
+export type ApprovalPolicy = "minimal" | "strict";
 
 export interface RoleDefinition {
 	name: AgentRoleName;
@@ -178,6 +179,7 @@ export interface TeamConfig {
 	supervisionMode?: SupervisionMode;
 	permissionMode?: PermissionMode;
 	executionMode?: ExecutionMode;
+	approvalPolicy?: ApprovalPolicy;
 	maxRepairRounds?: number;
 }
 

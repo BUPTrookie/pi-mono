@@ -270,6 +270,26 @@ describe("TeamRunComponent", () => {
 		expect(rendered).toContain("missing-output owner: build-cli file: src/index.js");
 	});
 
+	it("shows auto-approved command reuse in recent logs", () => {
+		const component = new TeamRunComponent(runStub(), {
+			outputDir: "out",
+			modelLabel: "fake",
+			maxParallelAgents: 1,
+		});
+
+		component.push({ type: "run_start", requirement: "Build", outputDir: "out/project", timestamp: 1 });
+		component.push({
+			type: "task_progress",
+			taskId: "build-cli",
+			message: "Auto-approved by prior approval: rm -rf src",
+			timestamp: 2,
+		});
+
+		const rendered = component.render(100).map(stripAnsi).join("\n");
+
+		expect(rendered).toContain("Auto-approved by prior approval: rm -rf src");
+	});
+
 	it("keeps rendered lines within the requested width", () => {
 		const component = new TeamRunComponent(runStub(), { outputDir: "out", modelLabel: "fake", maxParallelAgents: 1 });
 		component.push({

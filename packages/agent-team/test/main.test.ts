@@ -34,4 +34,10 @@ describe("agent-team CLI args", () => {
 
 		expect(parsed.options?.executionMode).toBe("restricted");
 	});
+
+	it("parses approval policy", () => {
+		const parsed = parseArgs(["Build a todo app", "--approval-policy", "strict"]);
+
+		expect(parsed.options?.approvalPolicy).toBe("strict");
+	});
 });

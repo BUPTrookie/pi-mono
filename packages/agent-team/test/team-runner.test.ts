@@ -5,7 +5,7 @@ import type { Api, Model } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import type { TeamAgentRunner } from "../src/team/team-lead.js";
 import { createTeamRun } from "../src/team/team-runner.js";
-import type { PlannerResult, PlannerRunner, TeamConfig } from "../src/types.js";
+import type { PlannerResult, PlannerRunner, TeamConfig, TeamEvent } from "../src/types.js";
 
 const model: Model<Api> = {
 	id: "fake",
@@ -188,5 +188,57 @@ describe("TeamRun execution recording", () => {
 		expect(result.success).toBe(true);
 		expect(checkpoints).toContain("plan_created");
 		expect(checkpoints).toContain("final_review");
+	});
+
+	it("remembers approved commands for the current run", async () => {
+		const outputBase = tempBase();
+		mkdirSync(outputBase, { recursive: true });
+		const approvalEvents: TeamEvent[] = [];
+		const runner: TeamAgentRunner = async (_description, agentConfig) => {
+			if (agentConfig.taskId === "build-cli") {
+				const request = {
+					taskId: agentConfig.taskId,
+					reason: "High-risk command requires approval.",
+					command: "rm -rf src",
+					approvalKey: "high:delete:src",
+				};
+				const first = await agentConfig.requestApproval?.(request);
+				const second = await agentConfig.requestApproval?.(request);
+				return {
+					taskId: agentConfig.taskId,
+					success: first === "approve" && second === "approve",
+					output: "ok",
+					filesCreated: ["src/index.js"],
+					turnsUsed: 1,
+				};
+			}
+			return {
+				taskId: agentConfig.taskId ?? "",
+				success: true,
+				output: "ok",
+				filesCreated: ["docs/e2e-report.md"],
+				turnsUsed: 1,
+			};
+		};
+		const run = createTeamRun(
+			{ ...config(outputBase), interventionMode: "interactive", approvalPolicy: "minimal" },
+			{
+				model,
+				plannerRunner: async () => plannerResult(),
+				agentRunner: runner,
+				validatorRunner: async () => [],
+				getApiKey: () => "key",
+			},
+		);
+		run.subscribe((event) => {
+			if (event.type !== "approval_requested") return;
+			approvalEvents.push(event);
+			run.approve(event.requestId, "approve");
+		});
+
+		const result = await run.start();
+
+		expect(result.success).toBe(true);
+		expect(approvalEvents).toHaveLength(1);
 	});
 });
