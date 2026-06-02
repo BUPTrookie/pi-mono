@@ -1,5 +1,13 @@
+import type { BeforeToolCallContext } from "@mariozechner/pi-agent-core";
 import { describe, expect, it } from "vitest";
-import { explainUnsafeBash } from "../src/agent/bash-safety.js";
+import { createBashSafetyGuard, explainUnsafeBash } from "../src/agent/bash-safety.js";
+
+function bashContext(command: string): BeforeToolCallContext {
+	return {
+		toolCall: { name: "bash" },
+		args: { command },
+	} as unknown as BeforeToolCallContext;
+}
 
 describe("bash safety", () => {
 	it("allows read-only inspection commands", () => {
@@ -58,5 +66,45 @@ describe("bash safety", () => {
 		expect(explainUnsafeBash("node server.js &")).toBeDefined();
 		expect(explainUnsafeBash("npm run start &")).toBeDefined();
 		expect(explainUnsafeBash("npm run check && node server.js &")).toBeDefined();
+	});
+
+	it("allows unsafe commands in open execution mode when approval is disabled", async () => {
+		const guard = createBashSafetyGuard({
+			taskId: "task",
+			interventionMode: "none",
+			executionMode: "open",
+		});
+
+		await expect(guard(bashContext("npm install"))).resolves.toBeUndefined();
+	});
+
+	it("keeps approval flow in open execution mode", async () => {
+		const approvals: string[] = [];
+		const guard = createBashSafetyGuard({
+			taskId: "task",
+			interventionMode: "interactive",
+			executionMode: "open",
+			requestApproval: async (request) => {
+				approvals.push(request.command);
+				return "reject";
+			},
+		});
+
+		const result = await guard(bashContext("rm -rf src"));
+
+		expect(approvals).toEqual(["rm -rf src"]);
+		expect(result?.block).toBe(true);
+	});
+
+	it("blocks unsafe commands in restricted execution mode without approval", async () => {
+		const guard = createBashSafetyGuard({
+			taskId: "task",
+			interventionMode: "none",
+			executionMode: "restricted",
+		});
+
+		const result = await guard(bashContext("npm install"));
+
+		expect(result?.block).toBe(true);
 	});
 });

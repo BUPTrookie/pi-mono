@@ -307,18 +307,20 @@ describe("TeamLead dynamic run", () => {
 		expect(e2eConfig?.thinking).toBe("medium");
 	});
 
-	it("passes permission mode through to role registry and worker agents", async () => {
+	it("passes permission and execution modes through to role registry and worker agents", async () => {
 		const outputDir = tempProject();
 		mkdirSync(outputDir, { recursive: true });
 		const permissionModes: Array<string | undefined> = [];
+		const executionModes: Array<string | undefined> = [];
 		const prompts: string[] = [];
 		const lead = new TeamLead({
-			config: { ...config(outputDir), permissionMode: "owned" },
+			config: { ...config(outputDir), permissionMode: "owned", executionMode: "restricted" },
 			model,
 			getApiKey: () => "key",
 			controls: controls(),
 			agentRunner: async (_description, agentConfig) => {
 				permissionModes.push(agentConfig.permissionMode);
+				executionModes.push(agentConfig.executionMode);
 				prompts.push(agentConfig.role.systemPrompt);
 				return { taskId: agentConfig.taskId ?? "", success: true, output: "ok", filesCreated: [], turnsUsed: 1 };
 			},
@@ -330,7 +332,9 @@ describe("TeamLead dynamic run", () => {
 
 		expect(result.success).toBe(true);
 		expect(permissionModes).toEqual(["owned", "owned"]);
+		expect(executionModes).toEqual(["restricted", "restricted"]);
 		expect(prompts[0]).toContain("Only write files inside your owned paths");
+		expect(prompts[0]).toContain("Execution is restricted");
 	});
 
 	it("does not run supervisor when supervision mode is off", async () => {

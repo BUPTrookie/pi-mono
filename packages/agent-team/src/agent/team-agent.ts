@@ -6,6 +6,7 @@ import type { Model } from "@mariozechner/pi-ai";
 import { convertToLlm } from "@mariozechner/pi-coding-agent";
 import type {
 	ApprovalDecision,
+	ExecutionMode,
 	InterventionMode,
 	PermissionMode,
 	RoleDefinition,
@@ -26,6 +27,7 @@ export interface TeamAgentConfig {
 	parentSignal?: AbortSignal;
 	thinkingLevel?: ThinkingLevel;
 	permissionMode?: PermissionMode;
+	executionMode?: ExecutionMode;
 	taskId?: string;
 	interventionMode?: InterventionMode;
 	onAgentEvent?: (event: AgentEvent) => void;
@@ -209,6 +211,7 @@ export async function runTeamAgent(taskDescription: string, config: TeamAgentCon
 	const { role, model, outputDir, streamFn, getApiKey, parentSignal, thinkingLevel } = config;
 	const maxTurns = role.maxTurns;
 	const permissionMode = config.permissionMode ?? "open";
+	const executionMode = config.executionMode ?? "open";
 
 	const tools = buildToolPool(role, outputDir);
 	const ownershipGuard =
@@ -216,6 +219,7 @@ export async function runTeamAgent(taskDescription: string, config: TeamAgentCon
 	const bashSafetyGuard = createBashSafetyGuard({
 		taskId: config.taskId ?? role.name,
 		interventionMode: config.interventionMode ?? "none",
+		executionMode,
 		requestApproval: config.requestApproval,
 		allowLocalServerLifecycle: role.profile === "e2e-verifier",
 	});

@@ -5,6 +5,7 @@ import { formatRoleProfilesForPlanner, getRoleProfile, isRoleProfileId } from ".
 import { buildRoleSystemPrompt } from "../roles/system-prompts.js";
 import type {
 	ContractSpec,
+	ExecutionMode,
 	GeneratedContracts,
 	PermissionMode,
 	PlannerDiagnostic,
@@ -32,13 +33,17 @@ interface PlannerParseOptions {
 	permissionMode?: PermissionMode;
 }
 
-function roleFromSpec(spec: RoleSpec, permissionMode: PermissionMode = "open"): RoleDefinition {
+function roleFromSpec(
+	spec: RoleSpec,
+	permissionMode: PermissionMode = "open",
+	executionMode: ExecutionMode = "open",
+): RoleDefinition {
 	const profile = getRoleProfile(spec.profile);
 	return {
 		name: spec.name,
 		profile: spec.profile,
 		description: spec.description,
-		systemPrompt: buildRoleSystemPrompt(spec, permissionMode),
+		systemPrompt: buildRoleSystemPrompt(spec, permissionMode, executionMode),
 		allowedTools: profile.allowedTools,
 		ownedDirectories: spec.ownedDirectories,
 		skillHints: profile.skillHints,
@@ -50,10 +55,11 @@ function roleFromSpec(spec: RoleSpec, permissionMode: PermissionMode = "open"): 
 export function createRoleRegistry(
 	plan: TeamPlan,
 	permissionMode: PermissionMode = "open",
+	executionMode: ExecutionMode = "open",
 ): Map<string, RoleDefinition> {
 	const registry = new Map<string, RoleDefinition>();
 	for (const role of plan.roles) {
-		registry.set(role.name, roleFromSpec(role, permissionMode));
+		registry.set(role.name, roleFromSpec(role, permissionMode, executionMode));
 	}
 	return registry;
 }

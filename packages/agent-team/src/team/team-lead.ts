@@ -7,6 +7,7 @@ import { TaskGraph } from "../task/task-graph.js";
 import { TaskScheduler } from "../task/task-scheduler.js";
 import type {
 	ApprovalDecision,
+	ExecutionMode,
 	PlannerRunner,
 	RoleDefinition,
 	SupervisorDecision,
@@ -66,7 +67,20 @@ function now(): number {
 	return Date.now();
 }
 
-function buildTaskDescription(task: Task, plan: TeamPlan, requirement: string, interventions: string[]): string {
+function executionGuidance(executionMode: ExecutionMode): string {
+	if (executionMode === "restricted") {
+		return "- Do not run dependency installation or long-lived service commands; the Lead runs controlled install and whole-project validation.";
+	}
+	return "- Use commands needed to complete and verify your task. If a command triggers the approval flow, wait for the approval result before continuing.";
+}
+
+function buildTaskDescription(
+	task: Task,
+	plan: TeamPlan,
+	requirement: string,
+	interventions: string[],
+	executionMode: ExecutionMode,
+): string {
 	const role = plan.roles.find((item) => item.name === task.role);
 	const contracts = plan.contracts.map(
 		(contract) => `- ${contract.path} (${contract.kind}${contract.required ? ", required" : ""})`,
@@ -108,7 +122,7 @@ Self-check before finishing:
 - Backend tasks should at minimum run syntax/load checks such as node --check on changed JS files and npm run check or npm test when those scripts exist.
 - Frontend tasks should run npm run check, npm test, or npm run build when those scripts exist.
 - If a check fails, fix the issue and rerun the check before finalizing.
-- Do not run dependency installation or long-lived service commands; the Lead runs controlled install and whole-project validation.
+${executionGuidance(executionMode)}
 - Your handoff must include changed files, contracts satisfied, checks run, and known risks. The runtime records it at docs/agent-team/tasks/<taskId>-handoff.json.
 
 Do not rely on prior agent prose summaries. Use the contract files and the actual files in the workspace as source of truth.${interventionText}`;
@@ -297,7 +311,11 @@ export class TeamLead {
 		this.emitEvent({ type: "plan_created", plan, timestamp: now() });
 		await this.supervise("plan_created", plan, {});
 
-		const roleRegistry = createRoleRegistry(plan, this.config.permissionMode ?? "open");
+		const roleRegistry = createRoleRegistry(
+			plan,
+			this.config.permissionMode ?? "open",
+			this.config.executionMode ?? "open",
+		);
 		const allResults: TaskResult[] = [];
 		let totalTurns = 0;
 		let round = 0;
@@ -546,6 +564,7 @@ export class TeamLead {
 					thinkingLevel: role.thinkingLevelOverride ?? this.config.thinkingLevel,
 					interventionMode: this.config.interventionMode ?? "none",
 					permissionMode: this.config.permissionMode ?? "open",
+					executionMode: this.config.executionMode ?? "open",
 					taskId: task.id,
 					onTaskProgress: (message) =>
 						this.emitEvent({ type: "task_progress", taskId: task.id, message, timestamp: now() }),
@@ -559,6 +578,7 @@ export class TeamLead {
 					plan,
 					this.config.requirement,
 					this.controls.getInterventions(),
+					this.config.executionMode ?? "open",
 				);
 				const result = await this.agentRunner(description, agentConfig);
 				result.taskId = task.id;

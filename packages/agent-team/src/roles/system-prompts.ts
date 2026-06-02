@@ -1,4 +1,4 @@
-import type { PermissionMode, RoleSpec } from "../types.js";
+import type { ExecutionMode, PermissionMode, RoleSpec } from "../types.js";
 import { getRoleProfile } from "./role-profiles.js";
 
 function permissionInstruction(role: RoleSpec, permissionMode: PermissionMode): string {
@@ -8,7 +8,18 @@ function permissionInstruction(role: RoleSpec, permissionMode: PermissionMode): 
 	return `- Prefer your assigned paths: ${role.ownedDirectories.join(", ")}; you may edit other project files when required to complete the task.`;
 }
 
-export function buildRoleSystemPrompt(role: RoleSpec, permissionMode: PermissionMode = "open"): string {
+function executionInstruction(executionMode: ExecutionMode): string {
+	if (executionMode === "restricted") {
+		return "- Execution is restricted: only run focused inspection and self-check commands unless the approval flow explicitly approves a broader command.";
+	}
+	return "- Execution is open: you may run commands needed to complete and verify the task; commands routed through the approval flow must wait for approval.";
+}
+
+export function buildRoleSystemPrompt(
+	role: RoleSpec,
+	permissionMode: PermissionMode = "open",
+	executionMode: ExecutionMode = "open",
+): string {
 	const profile = getRoleProfile(role.profile);
 	if (!profile) throw new Error(`Unknown role profile: ${role.profile}`);
 
@@ -25,9 +36,10 @@ Collaboration contract:
 - If docs/contracts/openapi.json exists, API routes and client calls must follow it exactly.
 - If docs/contracts/data-model.json exists, persistence and domain types must follow it.
 ${permissionInstruction(role, permissionMode)}
+${executionInstruction(executionMode)}
 - Treat acceptance criteria in the task prompt as mandatory.
 - Prefer small, coherent files over unrelated broad rewrites.
-- Do not run long-lived services or dependency installation commands unless explicitly approved.
+- Do not run long-lived services or dependency installation commands unless they are required for the task or explicitly approved.
 ${role.profile === "e2e-verifier" ? "- You MAY start local servers for end-to-end verification with node app.js &, npm run start &, npm run preview, or npm run serve. Stop started servers before finishing.\n" : ""}${role.profile === "e2e-verifier" ? "- You MUST send real HTTP requests only to localhost or 127.0.0.1 with curl/wget and report the actual observed responses in the e2e report.\n" : ""}- Report what you changed, which contract entries you satisfied, and anything left unresolved.
 
 Profile-specific instructions:

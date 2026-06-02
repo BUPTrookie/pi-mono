@@ -1,5 +1,5 @@
 import type { BeforeToolCallContext, BeforeToolCallResult } from "@mariozechner/pi-agent-core";
-import type { ApprovalDecision, InterventionMode } from "../types.js";
+import type { ApprovalDecision, ExecutionMode, InterventionMode } from "../types.js";
 
 export interface BashApprovalRequest {
 	taskId: string;
@@ -10,6 +10,7 @@ export interface BashApprovalRequest {
 export interface BashSafetyOptions {
 	taskId: string;
 	interventionMode: InterventionMode;
+	executionMode?: ExecutionMode;
 	requestApproval?: (request: BashApprovalRequest) => Promise<ApprovalDecision>;
 	allowLocalServerLifecycle?: boolean;
 }
@@ -94,6 +95,13 @@ export function createBashSafetyGuard(
 			allowLocalServerLifecycle: options.allowLocalServerLifecycle,
 		});
 		if (!reason) return undefined;
+
+		if ((options.executionMode ?? "open") === "open") {
+			if (options.interventionMode === "none" || !options.requestApproval) return undefined;
+			const decision = await options.requestApproval({ taskId: options.taskId, reason, command });
+			if (decision === "approve") return undefined;
+			return { block: true, reason: `Bash command rejected by approval flow: ${reason}` };
+		}
 
 		if (options.interventionMode === "none" || !options.requestApproval) {
 			return {

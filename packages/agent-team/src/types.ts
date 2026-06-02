@@ -17,6 +17,7 @@ export type RoleProfileId =
 export type InterventionMode = "none" | "approval" | "interactive";
 export type SupervisionMode = "off" | "milestone";
 export type PermissionMode = "open" | "owned";
+export type ExecutionMode = "open" | "restricted";
 
 export interface RoleDefinition {
 	name: AgentRoleName;
@@ -176,6 +177,7 @@ export interface TeamConfig {
 	interventionMode?: InterventionMode;
 	supervisionMode?: SupervisionMode;
 	permissionMode?: PermissionMode;
+	executionMode?: ExecutionMode;
 	maxRepairRounds?: number;
 }
 

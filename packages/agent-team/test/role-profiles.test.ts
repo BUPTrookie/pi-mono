@@ -53,6 +53,15 @@ describe("role profiles", () => {
 		expect(ownedPrompt).toContain("Only write files inside your owned paths");
 	});
 
+	it("describes open and restricted execution modes differently", () => {
+		const openPrompt = buildRoleSystemPrompt(role("backend-engineer"), "open", "open");
+		const restrictedPrompt = buildRoleSystemPrompt(role("backend-engineer"), "open", "restricted");
+
+		expect(openPrompt).toContain("Execution is open");
+		expect(openPrompt).toContain("approval flow");
+		expect(restrictedPrompt).toContain("Execution is restricted");
+	});
+
 	it("keeps docs engineer away from bash execution", () => {
 		const profile = getRoleProfile("docs-engineer");
 
