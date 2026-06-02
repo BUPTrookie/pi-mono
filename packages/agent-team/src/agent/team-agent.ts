@@ -93,8 +93,12 @@ function summarizeToolResult(result: unknown): string {
 }
 
 function isSelfCheckCommand(command: string): boolean {
-	return /\b(?:node\s+--check|npm\s+(?:run\s+)?(?:check|test|build)|pnpm\s+(?:run\s+)?(?:check|test|build)|yarn\s+(?:run\s+)?(?:check|test|build)|bun\s+(?:run\s+)?(?:check|test|build)|vitest|tsc|eslint)\b/i.test(
-		command,
+	return (
+		/\b(?:node\s+--check|npm\s+(?:run\s+)?(?:check|test|build)|pnpm\s+(?:run\s+)?(?:check|test|build)|yarn\s+(?:run\s+)?(?:check|test|build)|bun\s+(?:run\s+)?(?:check|test|build)|vitest|tsc|eslint)\b/i.test(
+			command,
+		) ||
+		/\b(?:npm|pnpm|yarn|bun)\s+install\b/i.test(command) ||
+		/\bnode\s+-e\s+["'][\s\S]*\brequire\s*\(/i.test(command)
 	);
 }
 
@@ -295,12 +299,20 @@ export async function runTeamAgent(taskDescription: string, config: TeamAgentCon
 
 	try {
 		await agent.prompt(taskDescription);
+		const parentAborted = parentSignal?.aborted ?? false;
+		const reachedMaxTurns = turnsUsed >= maxTurns;
+		const completionError = parentAborted
+			? "Parent aborted"
+			: reachedMaxTurns
+				? `Agent reached maximum turns (${maxTurns})`
+				: agent.state.errorMessage;
 		const result = buildTaskResultFromAgentState({
 			taskId: config.taskId ?? "",
 			roleName: role.name,
 			messages: agent.state.messages,
 			events,
 			turnsUsed,
+			fallbackError: completionError,
 		});
 		result.handoffPath = writeTaskHandoff(outputDir, result.taskId || role.name, result);
 		return result;

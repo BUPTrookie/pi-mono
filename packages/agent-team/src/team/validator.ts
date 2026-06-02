@@ -37,6 +37,8 @@ interface HandoffFile {
 	knownRisks?: unknown;
 }
 
+type HandoffAuditSeverity = Extract<ValidationIssue["severity"], "error" | "warning">;
+
 export interface RuntimeValidationOptions {
 	installDependencies?: boolean;
 	runPackageScripts?: boolean;
@@ -148,18 +150,35 @@ function readHandoff(outputDir: string, taskId: string): HandoffFile | undefined
 	return readJson(join(outputDir, "docs", "agent-team", "tasks", `${sanitizeTaskId(taskId)}-handoff.json`));
 }
 
+function inferLegacyCheckExitCode(result: unknown): number | null {
+	if (typeof result !== "string") return null;
+	if (/\b(?:fail|failed|error|non-zero)\b/i.test(result)) return 1;
+	if (/\b(?:pass|passed|ok|success|exit(?:ed)?\s*(?:code|status)?\s*0|code\s*0)\b/i.test(result)) return 0;
+	return null;
+}
+
 function normalizeChecksRun(value: unknown): TaskCheckResult[] {
 	if (!Array.isArray(value)) return [];
 	return value
 		.filter(
 			(item): item is Record<string, unknown> => item !== null && typeof item === "object" && !Array.isArray(item),
 		)
-		.map((item) => ({
-			command: typeof item.command === "string" ? item.command : "",
-			exitCode: typeof item.exitCode === "number" || item.exitCode === null ? item.exitCode : null,
-			summary: typeof item.summary === "string" ? item.summary : "",
-			required: typeof item.required === "boolean" ? item.required : true,
-		}))
+		.map((item) => {
+			const command =
+				typeof item.command === "string" ? item.command : typeof item.name === "string" ? item.name : "";
+			const summary =
+				typeof item.summary === "string" ? item.summary : typeof item.result === "string" ? item.result : "";
+			const exitCode =
+				typeof item.exitCode === "number" || item.exitCode === null
+					? item.exitCode
+					: inferLegacyCheckExitCode(item.result);
+			return {
+				command,
+				exitCode,
+				summary,
+				required: typeof item.required === "boolean" ? item.required : true,
+			};
+		})
 		.filter((check) => check.command.trim().length > 0);
 }
 
@@ -637,7 +656,11 @@ export function validateTeamOutput(outputDir: string, plan: TeamPlan): Validatio
 	return issues;
 }
 
-function validateTaskHandoffs(outputDir: string, plan: TeamPlan): ValidationIssue[] {
+function validateTaskHandoffs(
+	outputDir: string,
+	plan: TeamPlan,
+	auditSeverity: HandoffAuditSeverity = "error",
+): ValidationIssue[] {
 	const issues: ValidationIssue[] = [];
 	const rolesByName = new Map(plan.roles.map((role) => [role.name, role]));
 	for (const task of plan.tasks) {
@@ -648,14 +671,14 @@ function validateTaskHandoffs(outputDir: string, plan: TeamPlan): ValidationIssu
 		if (!handoff) {
 			issues.push(
 				issue(`missing-handoff-${task.id}`, `Task ${task.id} did not write its handoff JSON.`, {
-					severity: "error",
+					severity: auditSeverity,
 					ownerRole: task.role,
 					ownerTaskId: task.id,
 				}),
 			);
 			issues.push(
 				issue(`missing-checks-run-${task.id}`, `Task ${task.id} did not report required self-checks.`, {
-					severity: "error",
+					severity: auditSeverity,
 					ownerRole: task.role,
 					ownerTaskId: task.id,
 				}),
@@ -667,7 +690,7 @@ function validateTaskHandoffs(outputDir: string, plan: TeamPlan): ValidationIssu
 		if (checks.length === 0) {
 			issues.push(
 				issue(`missing-checks-run-${task.id}`, `Task ${task.id} did not report required self-checks.`, {
-					severity: "error",
+					severity: auditSeverity,
 					ownerRole: task.role,
 					ownerTaskId: task.id,
 				}),
@@ -677,7 +700,7 @@ function validateTaskHandoffs(outputDir: string, plan: TeamPlan): ValidationIssu
 		if (!checks.some((check) => check.exitCode === 0)) {
 			issues.push(
 				issue(`failed-checks-run-${task.id}`, `Task ${task.id} reported checks but none succeeded.`, {
-					severity: "error",
+					severity: auditSeverity,
 					ownerRole: task.role,
 					ownerTaskId: task.id,
 				}),
@@ -715,14 +738,21 @@ export async function validateTeamOutputWithChecks(
 		...(options.runSyntaxChecks ? buildSyntaxCommands(outputDir, plan, options.commandTimeoutMs) : []),
 		...runtime.commands,
 	];
-	const issues: ValidationIssue[] = [...staticIssues, ...validateTaskHandoffs(outputDir, plan), ...runtime.issues];
+	const issues: ValidationIssue[] = [...staticIssues, ...runtime.issues];
+	let hasSuccessfulRuntimeCheck = false;
+	let hasRuntimeFailure = runtime.issues.some((runtimeIssue) => runtimeIssue.severity === "error");
 	for (const command of commands) {
 		if (options.signal?.aborted) break;
 		const result = await runCommand(outputDir, command, options.signal);
 		if (result.exitCode !== 0 || result.timedOut) {
+			hasRuntimeFailure = true;
 			issues.push(issueForCommandFailure(command, result));
 			break;
 		}
+		hasSuccessfulRuntimeCheck = true;
 	}
+	const handoffAuditSeverity: HandoffAuditSeverity =
+		hasSuccessfulRuntimeCheck && !hasRuntimeFailure ? "warning" : "error";
+	issues.push(...validateTaskHandoffs(outputDir, plan, handoffAuditSeverity));
 	return issues;
 }

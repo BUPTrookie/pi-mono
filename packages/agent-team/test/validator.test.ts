@@ -219,8 +219,115 @@ describe("validator", () => {
 			runSyntaxChecks: false,
 		});
 
-		expect(issues.some((issue) => issue.id === "missing-handoff-task-api")).toBe(true);
-		expect(issues.some((issue) => issue.id === "missing-checks-run-task-api")).toBe(true);
+		expect(issues.find((issue) => issue.id === "missing-handoff-task-api")?.severity).toBe("error");
+		expect(issues.find((issue) => issue.id === "missing-checks-run-task-api")?.severity).toBe("error");
+	});
+
+	it("downgrades missing handoff checks to warning when project runtime validation succeeds", async () => {
+		const outputDir = tempProject();
+		mkdirSync(join(outputDir, "src"), { recursive: true });
+		const result = plannerResult();
+		writeContracts(outputDir, result);
+		writeFileSync(
+			join(outputDir, "package.json"),
+			JSON.stringify({ scripts: { check: "node --check src/index.js" } }),
+			"utf-8",
+		);
+		writeFileSync(join(outputDir, "src/index.js"), "console.log('/api/health /api/things/votes')", "utf-8");
+
+		const issues = await validateTeamOutputWithChecks(outputDir, result.plan, {
+			installDependencies: false,
+			runSyntaxChecks: false,
+			commandTimeoutMs: 10_000,
+		});
+
+		expect(issues.find((issue) => issue.id === "missing-handoff-task-api")?.severity).toBe("warning");
+		expect(issues.find((issue) => issue.id === "missing-checks-run-task-api")?.severity).toBe("warning");
+	});
+
+	it("downgrades failed handoff checks to warning when project runtime validation succeeds", async () => {
+		const outputDir = tempProject();
+		mkdirSync(join(outputDir, "src"), { recursive: true });
+		const result = plannerResult();
+		writeContracts(outputDir, result);
+		writeFileSync(
+			join(outputDir, "package.json"),
+			JSON.stringify({ scripts: { check: "node --check src/index.js" } }),
+			"utf-8",
+		);
+		writeFileSync(join(outputDir, "src/index.js"), "console.log('/api/health /api/things/votes')", "utf-8");
+		writeHandoff(outputDir, "task-api", [
+			{ command: "node --check src/index.js", exitCode: 1, summary: "syntax failed", required: true },
+		]);
+
+		const issues = await validateTeamOutputWithChecks(outputDir, result.plan, {
+			installDependencies: false,
+			runSyntaxChecks: false,
+			commandTimeoutMs: 10_000,
+		});
+
+		expect(issues.find((issue) => issue.id === "failed-checks-run-task-api")?.severity).toBe("warning");
+	});
+
+	it("keeps missing handoff checks as error when runtime validation fails", async () => {
+		const outputDir = tempProject();
+		mkdirSync(join(outputDir, "src"), { recursive: true });
+		const result = plannerResult();
+		writeContracts(outputDir, result);
+		writeFileSync(
+			join(outputDir, "package.json"),
+			JSON.stringify({ scripts: { check: 'node -e "process.exit(5)"' } }),
+			"utf-8",
+		);
+		writeFileSync(join(outputDir, "src/index.js"), "console.log('/api/health /api/things/votes')", "utf-8");
+
+		const issues = await validateTeamOutputWithChecks(outputDir, result.plan, {
+			installDependencies: false,
+			runSyntaxChecks: false,
+			commandTimeoutMs: 10_000,
+		});
+
+		expect(issues.some((issue) => issue.id === "runtime-check-npm-run-check")).toBe(true);
+		expect(issues.find((issue) => issue.id === "missing-handoff-task-api")?.severity).toBe("error");
+		expect(issues.find((issue) => issue.id === "missing-checks-run-task-api")?.severity).toBe("error");
+	});
+
+	it("accepts legacy handoff checks with name and result fields", async () => {
+		const outputDir = tempProject();
+		mkdirSync(join(outputDir, "src"), { recursive: true });
+		const result = plannerResult();
+		writeContracts(outputDir, result);
+		writeFileSync(
+			join(outputDir, "package.json"),
+			JSON.stringify({ scripts: { check: "node --check src/index.js" } }),
+			"utf-8",
+		);
+		writeFileSync(join(outputDir, "src/index.js"), "console.log('/api/health /api/things/votes')", "utf-8");
+		mkdirSync(join(outputDir, "docs", "agent-team", "tasks"), { recursive: true });
+		writeFileSync(
+			join(outputDir, "docs", "agent-team", "tasks", "task-api-handoff.json"),
+			JSON.stringify(
+				{
+					taskId: "task-api",
+					changedFiles: ["src/index.js"],
+					contractsSatisfied: ["OpenAPI routes represented"],
+					checksRun: [{ name: "syntax-check", result: "node --check src/index.js exited with code 0" }],
+					knownRisks: [],
+				},
+				null,
+				2,
+			),
+			"utf-8",
+		);
+
+		const issues = await validateTeamOutputWithChecks(outputDir, result.plan, {
+			installDependencies: false,
+			runPackageScripts: false,
+			runSyntaxChecks: false,
+		});
+
+		expect(issues.some((issue) => issue.id === "missing-checks-run-task-api")).toBe(false);
+		expect(issues.some((issue) => issue.id === "failed-checks-run-task-api")).toBe(false);
 	});
 
 	it("exempts docs-only tasks from required self-checks", async () => {
