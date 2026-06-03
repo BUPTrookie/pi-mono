@@ -1,6 +1,6 @@
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AgentEvent } from "@mariozechner/pi-agent-core";
+import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
 import { type AssistantMessage, type AssistantMessageEvent, EventStream, getModel } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
@@ -143,6 +143,56 @@ describe("team agent helpers", () => {
 		]);
 	});
 
+	it("summarizes structured bash tool results from text content", () => {
+		const events: AgentEvent[] = [
+			{
+				type: "tool_execution_start",
+				toolCallId: "check",
+				toolName: "bash",
+				args: { command: "npm test" },
+			},
+			{
+				type: "tool_execution_end",
+				toolCallId: "check",
+				toolName: "bash",
+				result: {
+					content: [{ type: "text", text: "PASS tests/notes.test.js\n3 tests passed" }],
+					details: {},
+				},
+				isError: false,
+			},
+		];
+
+		expect(extractChecksRunFromAgentEvents(events)).toEqual([
+			{ command: "npm test", exitCode: 0, summary: "PASS tests/notes.test.js 3 tests passed", required: true },
+		]);
+	});
+
+	it("extracts exit code from structured bash tool details", () => {
+		const events: AgentEvent[] = [
+			{
+				type: "tool_execution_start",
+				toolCallId: "check",
+				toolName: "bash",
+				args: { command: "npm run check" },
+			},
+			{
+				type: "tool_execution_end",
+				toolCallId: "check",
+				toolName: "bash",
+				result: {
+					content: [{ type: "text", text: "Type error" }],
+					details: { exitCode: 2 },
+				},
+				isError: true,
+			},
+		];
+
+		expect(extractChecksRunFromAgentEvents(events)).toEqual([
+			{ command: "npm run check", exitCode: 2, summary: "Type error", required: true },
+		]);
+	});
+
 	it("marks empty assistant output with no file changes as failed", () => {
 		const result = buildTaskResultFromAgentState({
 			taskId: "backend",
@@ -246,5 +296,166 @@ describe("team agent helpers", () => {
 		expect(second.turnsUsed).toBe(2);
 		expect(userMessages).toHaveLength(2);
 		expect(userMessages[1]?.content).toEqual([{ type: "text", text: "Fix missing package.json." }]);
+	});
+
+	it("does not send orphaned tool results after context trimming", async () => {
+		const role: RoleDefinition = {
+			name: "e2e",
+			profile: "e2e-verifier",
+			description: "Verify",
+			systemPrompt: "You are e2e.",
+			allowedTools: [],
+			ownedDirectories: ["docs"],
+			skillHints: [],
+			maxTurns: 10,
+		};
+		let sawOrphanedToolResult = false;
+		const session = createTeamAgentSession({
+			role,
+			model: getModel("openai", "gpt-4o-mini"),
+			outputDir: join(tmpdir(), `agent-team-trim-${Date.now()}-${Math.random().toString(36).slice(2)}`),
+			streamFn: (_model, context) => {
+				const visibleToolCalls = new Set<string>();
+				for (const message of context.messages) {
+					if (message.role === "assistant") {
+						for (const block of message.content) {
+							if (block.type === "toolCall") visibleToolCalls.add(block.id);
+						}
+					}
+					if (message.role === "toolResult" && !visibleToolCalls.has(message.toolCallId)) {
+						sawOrphanedToolResult = true;
+					}
+				}
+				return new MockAssistantStream(assistantMessage("done"));
+			},
+			taskId: "e2e",
+		});
+		const seeded = session.messages as AgentMessage[];
+		seeded.push({ role: "user", content: [{ type: "text", text: "Initial task" }], timestamp: 1 });
+		seeded.push({
+			...assistantMessage(""),
+			content: [{ type: "toolCall", id: "old-call", name: "read", arguments: { path: "package.json" } }],
+			stopReason: "toolUse",
+		});
+		seeded.push({
+			role: "toolResult",
+			toolCallId: "old-call",
+			toolName: "read",
+			content: [{ type: "text", text: "package" }],
+			details: {},
+			isError: false,
+			timestamp: 1,
+		});
+		for (let index = 0; index < 117; index++) {
+			seeded.push(assistantMessage(`filler ${index}`));
+		}
+
+		await session.prompt("Continue verification.", {
+			taskId: "e2e",
+			attempt: 1,
+			attemptMode: "initial",
+		});
+
+		expect(sawOrphanedToolResult).toBe(false);
+	});
+
+	it("repairs assistant toolCalls missing their toolResults", async () => {
+		const role: RoleDefinition = {
+			name: "e2e",
+			profile: "e2e-verifier",
+			description: "Verify",
+			systemPrompt: "You are e2e.",
+			allowedTools: [],
+			ownedDirectories: ["docs"],
+			skillHints: [],
+			maxTurns: 10,
+		};
+		let sawOrphanedToolResult = false;
+		let sawDanglingToolCall = false;
+		const session = createTeamAgentSession({
+			role,
+			model: getModel("openai", "gpt-4o-mini"),
+			outputDir: join(tmpdir(), `agent-team-repair-${Date.now()}-${Math.random().toString(36).slice(2)}`),
+			streamFn: (_model, context) => {
+				const visibleToolCalls = new Set<string>();
+				for (const message of context.messages) {
+					if (message.role === "assistant") {
+						for (const block of message.content) {
+							if (block.type === "toolCall") visibleToolCalls.add(block.id);
+						}
+					}
+					if (message.role === "toolResult" && !visibleToolCalls.has(message.toolCallId)) {
+						sawOrphanedToolResult = true;
+					}
+				}
+				// Check that every toolCall has a matching toolResult
+				const toolResults = new Set<string>();
+				for (const message of context.messages) {
+					if (message.role === "toolResult") toolResults.add(message.toolCallId);
+				}
+				for (const message of context.messages) {
+					if (message.role !== "assistant") continue;
+					for (const block of message.content) {
+						if (block.type === "toolCall" && !toolResults.has(block.id)) {
+							sawDanglingToolCall = true;
+						}
+					}
+				}
+				return new MockAssistantStream(assistantMessage("done"));
+			},
+			taskId: "e2e",
+		});
+		const seeded = session.messages as AgentMessage[];
+		seeded.push({ role: "user", content: [{ type: "text", text: "Initial task" }], timestamp: 1 });
+		// Assistant with 3 toolCalls but only 1 toolResult in the recent window
+		seeded.push({
+			...assistantMessage(""),
+			content: [
+				{ type: "toolCall", id: "call-a", name: "read", arguments: { path: "a.js" } },
+				{ type: "toolCall", id: "call-b", name: "read", arguments: { path: "b.js" } },
+				{ type: "toolCall", id: "call-c", name: "read", arguments: { path: "c.js" } },
+			],
+			stopReason: "toolUse",
+		});
+		seeded.push({
+			role: "toolResult",
+			toolCallId: "call-a",
+			toolName: "read",
+			content: [{ type: "text", text: "a" }],
+			details: {},
+			isError: false,
+			timestamp: 1,
+		});
+		seeded.push({
+			role: "toolResult",
+			toolCallId: "call-b",
+			toolName: "read",
+			content: [{ type: "text", text: "b" }],
+			details: {},
+			isError: false,
+			timestamp: 1,
+		});
+		seeded.push({
+			role: "toolResult",
+			toolCallId: "call-c",
+			toolName: "read",
+			content: [{ type: "text", text: "c" }],
+			details: {},
+			isError: false,
+			timestamp: 1,
+		});
+		// Push enough filler so the toolResults for call-b and call-c fall outside the recent window
+		for (let index = 0; index < 118; index++) {
+			seeded.push(assistantMessage(`filler ${index}`));
+		}
+
+		await session.prompt("Continue verification.", {
+			taskId: "e2e",
+			attempt: 1,
+			attemptMode: "initial",
+		});
+
+		expect(sawOrphanedToolResult).toBe(false);
+		expect(sawDanglingToolCall).toBe(false);
 	});
 });

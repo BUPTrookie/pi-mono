@@ -226,7 +226,7 @@ async function main(): Promise<void> {
 		console.error(`Error: ${result.error}`);
 	}
 
-	process.exit(result.success ? 0 : 1);
+	process.exitCode = result.success ? 0 : 1;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

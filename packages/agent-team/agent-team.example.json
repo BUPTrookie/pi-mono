@@ -2,12 +2,13 @@
 	"outputDir": "./output",
 	"model": {
 		"provider": "zai",
-		"model": "glm-5.1",
-		"apiKey": "your-api-key-here",
-		"baseUrl": "https://api.example.com/v1"
+		"model": "glm-5.1"
 	},
 	"maxParallelAgents": 2,
 	"thinkingLevel": "off",
 	"maxRepairRounds": 2,
-	"interventionMode": "none"
+	"supervisionMode": "milestone",
+	"permissionMode": "open",
+	"executionMode": "open",
+	"approvalPolicy": "minimal"
 }

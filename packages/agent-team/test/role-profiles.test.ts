@@ -42,6 +42,8 @@ describe("role profiles", () => {
 		expect(prompt).toContain("ordinary unit tests");
 		expect(prompt).toContain("docs/e2e-report.md");
 		expect(prompt).toContain("complete user workflows");
+		expect(prompt).toContain("Static code review is not an end-to-end PASS");
+		expect(prompt).toContain("runtime evidence");
 	});
 
 	it("describes open and owned permission modes differently", () => {

@@ -42,6 +42,7 @@ const SAFE_TEST_RUNNER = /\b(?:mocha|jest|vitest|node --test|npm test|npm run te
 const MEDIUM_PACKAGE_COMMAND = /\b(?:npm|pnpm|yarn|bun)\s+(?:install|add|remove)\b/i;
 const MEDIUM_PACKAGE_RUNNER = /\bnpx\s+/i;
 const MEDIUM_LOCAL_SERVICE = /\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+dev|run\s+start|start|run\s+preview|run\s+serve)\b/i;
+const HIGH_PROCESS_KILL = /\b(?:Stop-Process|killall|pkill|taskkill)\b.*\b(?:node|npm|npx)\b/i;
 const HIGH_DELETE = /\b(?:rm|del|erase|rmdir)\s+/i;
 const HIGH_CHMOD = /\bchmod\s+/i;
 const HIGH_DOCKER = /\bdocker\s+(?:build|up)\b|\bdocker\s+compose\s+(?:build|up)\b|\bdocker-compose\s+(?:build|up)\b/i;
@@ -121,6 +122,14 @@ function highRisk(command: string): BashCommandRisk | undefined {
 			category: "network-pipe",
 			reason: "high-risk bash command downloads external content and pipes it to a shell.",
 			approvalKey: `high:network-pipe:${origin}`,
+		};
+	}
+	if (HIGH_PROCESS_KILL.test(command)) {
+		return {
+			level: "high",
+			category: "process-kill",
+			reason: "high-risk bash command may kill the agent runtime process.",
+			approvalKey: `high:process-kill:${normalizeCommand(command)}`,
 		};
 	}
 	if (HIGH_DELETE.test(command)) {

@@ -20,7 +20,7 @@
 	},
 	"tavilyApiKey": "${TAVILY_API_KEY}",
 	"codex": {
-		"enabled": true,
+		"enabled": false,
 		"model": "o3",
 		"sandbox": "workspace-write"
 	}

@@ -100,6 +100,14 @@ describe.skipIf(process.platform !== "win32")("Windows child-process close handl
 		}
 	});
 
+	it("bash tool preserves stdout for short commands", async () => {
+		const bashTool = createBashTool(testDir);
+
+		const result = await bashTool.execute("test-call", { command: "echo hello" });
+
+		expect(getTextOutput(result)).toContain("hello");
+	});
+
 	it("bash tool resolves after the shell exits even if inherited stdio handles stay open", async () => {
 		const pidFile = join(testDir, "tool-grandchild.pid");
 		const command = createInheritedStdioCommand(pidFile);

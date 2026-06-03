@@ -97,14 +97,27 @@ function extractFilesCreated(messages: AgentMessage[]): string[] {
 
 function extractExitCode(result: unknown, isError: boolean): number | null {
 	if (isRecord(result) && typeof result.exitCode === "number") return result.exitCode;
+	if (isRecord(result) && isRecord(result.details) && typeof result.details.exitCode === "number") {
+		return result.details.exitCode;
+	}
 	const text = typeof result === "string" ? result : JSON.stringify(result ?? "");
 	const match = /Command exited with code\s+(\d+)/i.exec(text);
 	if (match) return Number(match[1]);
 	return isError ? 1 : 0;
 }
 
+function textFromToolResult(result: unknown): string {
+	if (!isRecord(result) || !Array.isArray(result.content)) return "";
+	return result.content
+		.filter((block): block is { type: string; text: string } => {
+			return isRecord(block) && block.type === "text" && typeof block.text === "string";
+		})
+		.map((block) => block.text)
+		.join("\n");
+}
+
 function summarizeToolResult(result: unknown): string {
-	const text = typeof result === "string" ? result : JSON.stringify(result ?? "");
+	const text = typeof result === "string" ? result : textFromToolResult(result) || JSON.stringify(result ?? "");
 	const normalized = text.replace(/\s+/g, " ").trim();
 	if (!normalized) return "completed";
 	return normalized.length > 240 ? `${normalized.slice(0, 237)}...` : normalized;
@@ -207,6 +220,79 @@ function writeTaskHandoff(outputDir: string, taskId: string, result: TaskResult)
 	return relativePath;
 }
 
+function assistantToolCallIds(message: AgentMessage): string[] {
+	if (message.role !== "assistant") return [];
+	return message.content.filter((block) => block.type === "toolCall").map((block) => block.id);
+}
+
+function hasAssistantToolCall(messages: AgentMessage[], toolCallId: string): boolean {
+	return messages.some((message) => assistantToolCallIds(message).includes(toolCallId));
+}
+
+function hasToolResult(messages: AgentMessage[], toolCallId: string): boolean {
+	return messages.some((message) => message.role === "toolResult" && message.toolCallId === toolCallId);
+}
+
+function repairToolResultContext(messages: AgentMessage[], selected: AgentMessage[]): AgentMessage[] {
+	const current = new Set(selected);
+	let changed = true;
+
+	while (changed) {
+		changed = false;
+
+		// Forward: toolResult missing its assistant → add the assistant back
+		const missingAssistantIds = new Set<string>();
+		for (const msg of current) {
+			if (msg.role === "toolResult" && !hasAssistantToolCall([...current], msg.toolCallId)) {
+				missingAssistantIds.add(msg.toolCallId);
+			}
+		}
+		for (const msg of messages) {
+			if (msg.role !== "assistant" || current.has(msg)) continue;
+			if (assistantToolCallIds(msg).some((id) => missingAssistantIds.has(id))) {
+				current.add(msg);
+				changed = true;
+			}
+		}
+
+		// Reverse: assistant toolCall missing its toolResult → add the toolResult back
+		for (const msg of current) {
+			if (msg.role !== "assistant") continue;
+			for (const callId of assistantToolCallIds(msg)) {
+				if (hasToolResult([...current], callId)) continue;
+				const found = messages.find((m) => m.role === "toolResult" && m.toolCallId === callId);
+				if (found && !current.has(found)) {
+					current.add(found);
+					changed = true;
+				}
+			}
+		}
+	}
+
+	// Preserve original order
+	const ordered = messages.filter((m) => current.has(m));
+
+	// Final cleanup: strip dangling tool from assistant messages, remove orphaned toolResults
+	const cleaned = ordered.map((msg) => {
+		if (msg.role !== "assistant") return msg;
+		const validContent = msg.content.filter((block) => {
+			if (block.type !== "toolCall") return true;
+			return hasToolResult(ordered, block.id);
+		});
+		if (validContent.length === msg.content.length) return msg;
+		return { ...msg, content: validContent };
+	});
+
+	return cleaned.filter((msg) => {
+		if (msg.role === "toolResult") return hasAssistantToolCall(cleaned, msg.toolCallId);
+		if (msg.role === "assistant") {
+			const calls = msg.content.filter((b) => b.type === "toolCall");
+			if (calls.length > 0 && !calls.some((b) => hasToolResult(cleaned, b.id))) return false;
+		}
+		return true;
+	});
+}
+
 /**
  * Contract-aware context transform that keeps project contract references and recent messages.
  */
@@ -235,11 +321,12 @@ function createContractAwareTransformContext(
 		});
 		const merged = [systemMsg, ...contractMessages, ...recent];
 		const seen = new Set<AgentMessage>();
-		return merged.filter((message) => {
+		const selected = merged.filter((message) => {
 			if (seen.has(message)) return false;
 			seen.add(message);
 			return true;
 		});
+		return repairToolResultContext(messages, selected);
 	};
 }
 

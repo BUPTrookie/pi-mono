@@ -108,6 +108,7 @@ const ROLE_PROFILES: Record<RoleProfileId, RoleProfile> = {
 			"Run npm test (or equivalent) and report exit code and any failures.",
 			"Do not write ordinary unit tests; unit and module tests belong to implementation or test-engineer tasks.",
 			"Write docs/e2e-report.md with every scenario command, exit code or status, observed result, evidence, and acceptance status as PASS or FAIL.",
+			"Static code review is not an end-to-end PASS. A PASS requires runtime evidence from a command you actually ran; if runtime verification cannot run, mark acceptance status as FAIL or request human input and explain the missing runtime evidence.",
 			"If a workflow fails because upstream implementation is wrong, report suspectedOwnerTaskId or suspectedFile when you can infer it, but do not fix business code yourself.",
 		],
 	},

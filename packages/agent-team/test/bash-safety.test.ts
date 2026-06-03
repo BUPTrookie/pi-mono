@@ -170,4 +170,18 @@ describe("bash safety", () => {
 		expect(result?.block).toBe(true);
 		expect(result?.reason).toContain("high-risk");
 	});
+	it("blocks commands that kill the agent runtime process", () => {
+		expect(explainUnsafeBash(String.raw`Stop-Process -Name "node" -Force`)).toBeDefined();
+		expect(explainUnsafeBash("killall node")).toBeDefined();
+		expect(explainUnsafeBash("pkill -f node")).toBeDefined();
+		expect(explainUnsafeBash("taskkill /IM node.exe /F")).toBeDefined();
+		expect(classifyBashCommand(String.raw`Stop-Process -Name "node" -Force`).level).toBe("high");
+		expect(classifyBashCommand("killall node").level).toBe("high");
+	});
+
+	it("allows killing specific child processes by PID", () => {
+		const e2e = { allowLocalServerLifecycle: true };
+		expect(explainUnsafeBash("kill 12345", e2e)).toBeUndefined();
+		expect(explainUnsafeBash("kill %1", e2e)).toBeUndefined();
+	});
 });
