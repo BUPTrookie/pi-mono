@@ -171,11 +171,11 @@ describe("bash safety", () => {
 		expect(result?.reason).toContain("high-risk");
 	});
 	it("blocks commands that kill the agent runtime process", () => {
-		expect(explainUnsafeBash(String.raw`Stop-Process -Name "node" -Force`)).toBeDefined();
+		expect(explainUnsafeBash('Stop-Process -Name "node" -Force')).toBeDefined();
 		expect(explainUnsafeBash("killall node")).toBeDefined();
 		expect(explainUnsafeBash("pkill -f node")).toBeDefined();
 		expect(explainUnsafeBash("taskkill /IM node.exe /F")).toBeDefined();
-		expect(classifyBashCommand(String.raw`Stop-Process -Name "node" -Force`).level).toBe("high");
+		expect(classifyBashCommand('Stop-Process -Name "node" -Force').level).toBe("high");
 		expect(classifyBashCommand("killall node").level).toBe("high");
 	});
 
